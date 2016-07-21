@@ -1,0 +1,6 @@
+aioredis
+appdirs
+ujson
+redis
+hiredis
+asynctest
