@@ -28,6 +28,6 @@ def str_to_number(s):
 
 async def msg_reader(ch: aioredis.Channel, cb: asyncio.Future):
     while await ch.wait_message():
-        msg = await ch.get(encoding='utf-8')
+        _, msg = await ch.get(encoding='utf-8')
         if not cb.done():
             cb.set_result(msg)

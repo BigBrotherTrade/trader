@@ -39,12 +39,36 @@ class APITest(asynctest.TestCase):
             db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
         self.api = CTPApi(io_loop=self.loop)
 
+    @asynctest.skip(reason='no need')
     async def test_market_login(self):
         rst = await self.api.MarketReqUserLogin(
             broker_id=config.get('sim', 'broker'),
             user_id=config.get('sim', 'investor'),
-            password=config.get('sim', 'broker'),
+            password=config.get('sim', 'passwd'),
         )
         logger.info('market_login rst = %s', rst)
+        self.assertIsNotNone(rst)
+        self.assertNotEqual(rst, 'failed')
+
+    @asynctest.skip(reason='no need')
+    async def test_trade_login(self):
+        rst = await self.api.TradeReqUserLogin(
+            broker_id=config.get('sim', 'broker'),
+            user_id=config.get('sim', 'investor'),
+            password=config.get('sim', 'passwd'),
+        )
+        logger.info('trade_login rst = %s', rst)
+        self.assertIsNotNone(rst)
+        self.assertNotEqual(rst, 'failed')
+
+    async def test_subscribe(self):
+        rst = await self.api.SubscribeMarketData(["IF1608"])
+        logger.info('test_subscribe rst = %s', rst)
+        self.assertIsNotNone(rst)
+        self.assertNotEqual(rst, 'failed')
+
+    async def test_unsubscribe(self):
+        rst = await self.api.UnSubscribeMarketData(["IF1608"])
+        logger.info('test_unsubscribe rst = %s', rst)
         self.assertIsNotNone(rst)
         self.assertNotEqual(rst, 'failed')
