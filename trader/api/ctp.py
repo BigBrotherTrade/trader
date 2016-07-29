@@ -175,3 +175,34 @@ class CTPApi:
                 await sub_client.unsubscribe(channel_name1, channel_name2)
                 sub_client.close()
             return None
+
+    async def register_market_callback(self, func):
+        sub_client = None
+        channel_name = None
+        try:
+            sub_client = await aioredis.create_redis(
+                (config.get('REDIS', 'host', fallback='localhost'),
+                 config.getint('REDIS', 'port', fallback=6379)),
+                db=config.getint('REDIS', 'db', fallback=1))
+            request_id = self.next_id()
+            channel_name = self.trade_response_format.format('OnRtnDepthMarketData', '*')
+            ch = await sub_client.psubscribe(channel_name)
+            asyncio.ensure_future(msg_reader(ch), loop=self.io_loop)
+            param_dict = json.dumps({
+                'BrokerID': broker_id,
+                'UserID': user_id,
+                'Password': password,
+                'RequestID': request_id,
+            })
+            self.redis_client.publish(self.request_format.format('TradeReqUserLogin'), param_dict)
+            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
+            await sub_client.punsubscribe(channel_name, channel_name2)
+            sub_client.close()
+            await asyncio.wait(tasks, loop=self.io_loop)
+            return json.loads(rst)
+        except Exception as e:
+            logger.error('TradeReqUserLogin failed: %s', repr(e), exc_info=True)
+            if sub_client and sub_client.in_pubsub and channel_name:
+                await sub_client.unsubscribe(channel_name, channel_name2)
+                sub_client.close()
+            return None
