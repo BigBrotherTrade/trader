@@ -20,7 +20,7 @@ import ujson as json
 import aioredis
 
 from trader.utils import logger as my_logger
-from trader.api import BaseModule
+from trader.strategy import BaseModule
 from trader.utils.func_container import param_function
 from trader.utils.read_config import *
 from trader.utils import msg_reader
@@ -29,17 +29,17 @@ logger = my_logger.get_logger('CTPApi')
 HANDLER_TIME_OUT = config.getint('TRADE', 'command_timeout', fallback=10)
 
 
-class CTPApi(BaseModule):
+class TradeStrategy(BaseModule):
     market_response_format = config.get('MSG_CHANNEL', 'market_response_format')
     trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
     request_format = config.get('MSG_CHANNEL', 'request_format')
     __request_id = random.randint(0, 65535)
 
-    def start(self):
-        pass
+    async def start(self):
+        await self.SubscribeMarketData(['IF1609'])
 
-    def stop(self):
-        pass
+    async def stop(self):
+        await self.UnSubscribeMarketData(['IF1609'])
 
     def next_id(self):
         self.__request_id = 1 if self.__request_id == 65535 else self.__request_id + 1
@@ -104,8 +104,9 @@ class CTPApi(BaseModule):
             return None
 
     @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
-    async def OnRtnDepthMarketData(self, _, tick: dict):
+    async def OnRtnDepthMarketData(self, channel, tick: dict):
         try:
-            logger.info('tick: %s', tick)
+            inst = channel.split(':')[-1]
+            logger.info('inst=%s, tick: %s', inst, tick)
         except Exception as ee:
             logger.error('fresh_formula failed: %s', repr(ee), exc_info=True)
