@@ -110,3 +110,19 @@ class TradeStrategy(BaseModule):
             logger.info('inst=%s, tick: %s', inst, tick)
         except Exception as ee:
             logger.error('fresh_formula failed: %s', repr(ee), exc_info=True)
+
+    @param_function(channel='MSG:CTP:RSP:TRADE::OnRtnTrade:*')
+    async def OnRtnTrade(self, channel, trade: dict):
+        try:
+            order_ref = channel.split(':')[-1]
+            logger.info('order_ref=%s, tick: %s', order_ref, trade)
+        except Exception as ee:
+            logger.error('fresh_formula failed: %s', repr(ee), exc_info=True)
+
+    @param_function(channel='MSG:CTP:RSP:TRADE::OnRtnOrder:*')
+    async def OnRtnOrder(self, channel, order: dict):
+        try:
+            order_ref = channel.split(':')[-1]
+            logger.info('order_ref=%s, tick: %s', order_ref, order)
+        except Exception as ee:
+            logger.error('fresh_formula failed: %s', repr(ee), exc_info=True)
