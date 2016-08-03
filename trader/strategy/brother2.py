@@ -23,7 +23,6 @@ from trader.utils import logger as my_logger
 from trader.strategy import BaseModule
 from trader.utils.func_container import param_function
 from trader.utils.read_config import *
-from trader.utils import msg_reader
 
 logger = my_logger.get_logger('CTPApi')
 HANDLER_TIME_OUT = config.getint('TRADE', 'command_timeout', fallback=10)
@@ -34,16 +33,79 @@ class TradeStrategy(BaseModule):
     trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
     request_format = config.get('MSG_CHANNEL', 'request_format')
     __request_id = random.randint(0, 65535)
+    inst_ids = ['IF1609', 'cu1608']
+
+    @staticmethod
+    async def query_reader(ch: aioredis.Channel, cb: asyncio.Future):
+        msg_list = []
+        while await ch.wait_message():
+            _, msg = await ch.get(encoding='utf-8')
+            msg_dict = json.loads(msg)
+            msg_list.append(msg_dict)
+            if msg_dict['bIsLast'] and not cb.done():
+                cb.set_result(msg_list)
 
     async def start(self):
-        await self.SubscribeMarketData(['IF1609'])
+        # await self.SubscribeMarketData(self.inst_ids)
+        rst = await self.query('Instrument')
+        print('Instrument=', len(rst))
+
+        rst = await self.query('InstrumentCommissionRate')
+        print('InstrumentCommissionRate=', len(rst))
+
+        rst = await self.query('InstrumentMarginRate')
+        print('InstrumentMarginRate=', len(rst))
+
+        rst = await self.query('TradingAccount')
+        print('TradingAccount=', rst)
+
+        rst = await self.query('InvestorPosition')
+        print('InvestorPosition=', rst)
+
+        rst = await self.query('InvestorPositionDetail')
+        print('InvestorPositionDetail=', rst)
+
+        rst = await self.query('Order')
+        print('Order=', rst)
 
     async def stop(self):
-        await self.UnSubscribeMarketData(['IF1609'])
+        # await self.UnSubscribeMarketData(self.inst_ids)
+        pass
 
     def next_id(self):
         self.__request_id = 1 if self.__request_id == 65535 else self.__request_id + 1
         return self.__request_id
+
+    async def query(self, query_type, **kwargs):
+        sub_client = None
+        channel_name1, channel_name2 = None, None
+        try:
+            sub_client = await aioredis.create_redis(
+                (config.get('REDIS', 'host', fallback='localhost'),
+                 config.getint('REDIS', 'port', fallback=6379)),
+                db=config.getint('REDIS', 'db', fallback=1))
+            request_id = self.next_id()
+            kwargs['RequestID'] = request_id
+            channel_name1 = self.trade_response_format.format('OnRspQry'+query_type, request_id)
+            channel_name2 = self.trade_response_format.format('OnRspError', request_id)
+            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
+            cb = self.io_loop.create_future()
+            tasks = [
+                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
+            ]
+            self.redis_client.publish(self.request_format.format('ReqQry' + query_type), json.dumps(kwargs))
+            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
+            await sub_client.punsubscribe(channel_name1, channel_name2)
+            sub_client.close()
+            await asyncio.wait(tasks, loop=self.io_loop)
+            return rst
+        except Exception as e:
+            logger.error('%s failed: %s', query_type, repr(e), exc_info=True)
+            if sub_client and sub_client.in_pubsub and channel_name1:
+                await sub_client.unsubscribe(channel_name1, channel_name2)
+                sub_client.close()
+            return None
 
     async def SubscribeMarketData(self, inst_ids: list):
         sub_client = None
@@ -58,8 +120,8 @@ class TradeStrategy(BaseModule):
             ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
             cb = self.io_loop.create_future()
             tasks = [
-                asyncio.ensure_future(msg_reader(ch1, cb), loop=self.io_loop),
-                asyncio.ensure_future(msg_reader(ch2, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
             ]
             self.redis_client.publish(self.request_format.format('SubscribeMarketData'), json.dumps(inst_ids))
             rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
@@ -87,8 +149,8 @@ class TradeStrategy(BaseModule):
             ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
             cb = self.io_loop.create_future()
             tasks = [
-                asyncio.ensure_future(msg_reader(ch1, cb), loop=self.io_loop),
-                asyncio.ensure_future(msg_reader(ch2, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
             ]
             self.redis_client.publish(self.request_format.format('UnSubscribeMarketData'), json.dumps(inst_ids))
             rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
@@ -103,8 +165,64 @@ class TradeStrategy(BaseModule):
                 sub_client.close()
             return None
 
+    async def ReqQryInstrument(self, inst_ids: list):
+        pass
+
+    async def ReqQryInstrumentCommissionRate(self, inst_ids: list):
+        pass
+
+    async def ReqQryInstrumentMarginRate(self, inst_ids: list):
+        pass
+
+    async def ReqQryTradingAccount(self, inst_ids: list):
+        pass
+
+    async def ReqQryInvestorPosition(self, inst_ids: list):
+        pass
+
+    async def ReqQryInvestorPositionDetail(self, inst_ids: list):
+        pass
+
+    async def ReqQryOrder(self, inst_ids: list):
+        pass
+
+    async def ReqQryTrade(self, inst_ids: list):
+        pass
+
+    async def ReqOrderInsert(self, inst_ids: list):
+        pass
+
+    async def ReqOrderAction(self, inst_ids: list):
+        pass
+
     @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
     async def OnRtnDepthMarketData(self, channel, tick: dict):
+        """
+        'PreOpenInterest': 50990,
+        'TradingDay': '20160803',
+        'SettlementPrice': 1.7976931348623157e+308,
+        'AskVolume1': 40,
+        'Volume': 11060,
+        'LastPrice': 37740,
+        'LowestPrice': 37720,
+        'ClosePrice': 1.7976931348623157e+308,
+        'ActionDay': '20160803',
+        'UpdateMillisec': 0,
+        'PreClosePrice': 37840,
+        'LowerLimitPrice': 35490,
+        'OpenInterest': 49460,
+        'UpperLimitPrice': 40020,
+        'AveragePrice': 189275.7233273056,
+        'HighestPrice': 38230,
+        'BidVolume1': 10,
+        'UpdateTime': '11:03:12',
+        'InstrumentID': 'cu1608',
+        'PreSettlementPrice': 37760,
+        'OpenPrice': 37990,
+        'BidPrice1': 37740,
+        'Turnover': 2093389500,
+        'AskPrice1': 37750
+        """
         try:
             inst = channel.split(':')[-1]
             logger.info('inst=%s, tick: %s', inst, tick)

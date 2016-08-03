@@ -77,8 +77,8 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
             real_channel, msg = await ch.get_json()
             channel = ch.name.decode()
             # logger.debug("%s channel[%s] Got Message:%s", type(self).__name__, channel, msg)
-            self.io_loop.create_task(self.channel_router[channel](real_channel, msg))
-        logger.debug('%s quit msg_reader!', type(self).__name__)
+            self.io_loop.create_task(self.channel_router[channel](real_channel.decode(), msg))
+        logger.debug('%s quit query_reader!', type(self).__name__)
 
     @abstractmethod
     async def start(self):
