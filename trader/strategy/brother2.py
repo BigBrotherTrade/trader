@@ -18,6 +18,7 @@ import random
 
 import ujson as json
 import aioredis
+import datetime
 
 from trader.utils import logger as my_logger
 from trader.strategy import BaseModule
@@ -33,6 +34,7 @@ class TradeStrategy(BaseModule):
     trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
     request_format = config.get('MSG_CHANNEL', 'request_format')
     __request_id = random.randint(0, 65535)
+    __order_ref = random.randint(0, 999)
     inst_ids = ['IF1609', 'cu1608']
 
     @staticmethod
@@ -71,6 +73,11 @@ class TradeStrategy(BaseModule):
     async def stop(self):
         # await self.UnSubscribeMarketData(self.inst_ids)
         pass
+
+    def next_order_ref(self):
+        self.__order_ref = 1 if self.__order_ref == 999 else self.__request_id + 1
+        now = datetime.datetime.now()
+        return '{:02}:{:02}:{:02}:{:03}'.format(now.hour, now.minute, now.second, self.__order_ref)
 
     def next_id(self):
         self.__request_id = 1 if self.__request_id == 65535 else self.__request_id + 1
@@ -165,32 +172,47 @@ class TradeStrategy(BaseModule):
                 sub_client.close()
             return None
 
-    async def ReqQryInstrument(self, inst_ids: list):
-        pass
-
-    async def ReqQryInstrumentCommissionRate(self, inst_ids: list):
-        pass
-
-    async def ReqQryInstrumentMarginRate(self, inst_ids: list):
-        pass
-
-    async def ReqQryTradingAccount(self, inst_ids: list):
-        pass
-
-    async def ReqQryInvestorPosition(self, inst_ids: list):
-        pass
-
-    async def ReqQryInvestorPositionDetail(self, inst_ids: list):
-        pass
-
-    async def ReqQryOrder(self, inst_ids: list):
-        pass
-
-    async def ReqQryTrade(self, inst_ids: list):
-        pass
-
-    async def ReqOrderInsert(self, inst_ids: list):
-        pass
+    async def ReqOrderInsert(self, **kwargs):
+        """
+        InstrumentID 合约
+        VolumeTotalOriginal 手数
+        LimitPrice 限价
+        StopPrice 止损价
+        CombOffsetFlag 开,平,平昨
+        ContingentCondition 触发条件
+        TimeCondition 持续时间
+        """
+        sub_client = None
+        channel_name1, channel_name2 = None, None
+        try:
+            sub_client = await aioredis.create_redis(
+                (config.get('REDIS', 'host', fallback='localhost'),
+                 config.getint('REDIS', 'port', fallback=6379)),
+                db=config.getint('REDIS', 'db', fallback=1))
+            request_id = self.next_id()
+            order_ref = self.next_order_ref()
+            kwargs['nRequestId'] = request_id
+            kwargs['OrderRef'] = order_ref
+            channel_name1 = self.trade_response_format.format('OnRspOrderInsert', request_id)
+            channel_name2 = self.trade_response_format.format('OnRspError', request_id)
+            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
+            cb = self.io_loop.create_future()
+            tasks = [
+                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
+            ]
+            self.redis_client.publish(self.request_format.format('ReqOrderInsert'), json.dumps(kwargs))
+            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
+            await sub_client.punsubscribe(channel_name1, channel_name2)
+            sub_client.close()
+            await asyncio.wait(tasks, loop=self.io_loop)
+            return rst
+        except Exception as e:
+            logger.error('ReqOrderInsert failed: %s', repr(e), exc_info=True)
+            if sub_client and sub_client.in_pubsub and channel_name1:
+                await sub_client.unsubscribe(channel_name1, channel_name2)
+                sub_client.close()
+            return None
 
     async def ReqOrderAction(self, inst_ids: list):
         pass
