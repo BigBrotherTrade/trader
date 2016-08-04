@@ -172,12 +172,25 @@ class TradeStrategy(BaseModule):
                 sub_client.close()
             return None
 
+    async def buy(self, inst: str, limit_price: float):
+        pass
+
+    async def sell(self, inst: str, limit_price: float):
+        pass
+
+    async def sell_short(self, inst: str, limit_price: float):
+        pass
+
+    async def buy_cover(self, inst: str, limit_price: float):
+        pass
+
     async def ReqOrderInsert(self, **kwargs):
         """
         InstrumentID 合约
         VolumeTotalOriginal 手数
         LimitPrice 限价
         StopPrice 止损价
+        Direction 方向
         CombOffsetFlag 开,平,平昨
         ContingentCondition 触发条件
         TimeCondition 持续时间
