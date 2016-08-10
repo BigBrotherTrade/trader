@@ -1,3 +1,4 @@
+# coding=utf-8
 T = dict()
 T['TE_RESUME'] = 'int'  # 流重传方式
 TERT_RESTART = 0  # 从本交易日开始重传

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# coding=utf-8
 #
 # Copyright 2016 timercrack
 #
@@ -74,7 +74,7 @@ class TradeStrategy(BaseModule):
         self.__current = self.__pre_balance + account['CloseProfit'] + account['PositionProfit'] - account['Commission']
         self.__cash = account['Available']
         self.__cur_account = account
-        logger.info(u"可用资金: %s,静态权益: %s,动态权益: %s", self.__cash, self.__pre_balance, self.__current)
+        logger.info("可用资金: {:,.0f} 静态权益: {:,.0f} 动态权益: {:,.0f}".format(self.__cash, self.__pre_balance, self.__current))
 
     def calc_fee(self, trade: dict):
         inst = trade['InstrumentID']
@@ -98,24 +98,28 @@ class TradeStrategy(BaseModule):
         while await ch.wait_message():
             _, msg = await ch.get(encoding='utf-8')
             msg_dict = json.loads(msg)
-            msg_list.append(msg_dict)
+            if 'empty' in msg_dict:
+                if msg_dict['empty'] is False:
+                    msg_list.append(msg_dict)
+            else:
+                msg_list.append(msg_dict)
             if msg_dict['bIsLast'] and not cb.done():
                 cb.set_result(msg_list)
 
     async def start(self):
-        inst_list = await self.query('Instrument')
-        for inst in inst_list:
+        for inst_id in self.__inst_ids:
+            inst = (await self.query('Instrument', InstrumentID=inst_id))[0]
             if inst['IsTrading'] == 0:
                 continue
             self.__shares[inst['InstrumentID']].append(inst)
             self.__instruments[inst['InstrumentID']]['info'] = inst
             inst_fee = await self.query('InstrumentCommissionRate', InstrumentID=inst['InstrumentID'])
-            self.__instruments[inst.InstrumentID]['fee'] = inst_fee[0]
+            self.__instruments[inst['InstrumentID']]['fee'] = inst_fee[0]
             inst_margin = await self.query('InstrumentMarginRate', InstrumentID=inst['InstrumentID'])
-            self.__instruments[inst.InstrumentID]['margin'] = inst_margin[0]
+            self.__instruments[inst['InstrumentID']]['margin'] = inst_margin[0]
 
         account = await self.query('TradingAccount')
-        self.update_account(account)
+        self.update_account(account[0])
 
         pos_list = await self.query('InvestorPositionDetail')
         if pos_list:
@@ -342,8 +346,36 @@ class TradeStrategy(BaseModule):
                 sub_client.close()
             return None
 
-    async def ReqOrderAction(self, inst_ids: list):
-        pass
+    async def cancel_order(self, order: dict):
+        sub_client = None
+        channel_name1, channel_name2 = None, None
+        try:
+            sub_client = await aioredis.create_redis(
+                (config.get('REDIS', 'host', fallback='localhost'),
+                 config.getint('REDIS', 'port', fallback=6379)),
+                db=config.getint('REDIS', 'db', fallback=1))
+            request_id = self.next_id()
+            order['nRequestId'] = request_id
+            channel_name1 = self.__trade_response_format.format('OnRspOrderAction', request_id)
+            channel_name2 = self.__trade_response_format.format('OnRspError', request_id)
+            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
+            cb = self.io_loop.create_future()
+            tasks = [
+                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
+            ]
+            self.redis_client.publish(self.__request_format.format('ReqOrderAction'), json.dumps(order))
+            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
+            await sub_client.punsubscribe(channel_name1, channel_name2)
+            sub_client.close()
+            await asyncio.wait(tasks, loop=self.io_loop)
+            return rst
+        except Exception as e:
+            logger.error('ReqOrderInsert failed: %s', repr(e), exc_info=True)
+            if sub_client and sub_client.in_pubsub and channel_name1:
+                await sub_client.unsubscribe(channel_name1, channel_name2)
+                sub_client.close()
+            return None
 
     @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
     async def OnRtnDepthMarketData(self, channel, tick: dict):
@@ -375,6 +407,7 @@ class TradeStrategy(BaseModule):
         """
         try:
             inst = channel.split(':')[-1]
+            tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
             logger.info('inst=%s, tick: %s', inst, tick)
         except Exception as ee:
             logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)

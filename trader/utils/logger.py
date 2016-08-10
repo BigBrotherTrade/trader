@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+# coding=utf-8
 #
 # Copyright 2016 timercrack
 #
@@ -27,7 +27,7 @@ def get_logger(logger_name='main'):
         os.makedirs(app_dir.user_log_dir)
     formatter = logging.Formatter(config.get('LOG', 'format',
                                              fallback="%(asctime)s %(name)s [%(levelname)s] %(message)s"))
-    file_handler = logging.FileHandler(log_file)
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
     file_handler.setFormatter(formatter)
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
