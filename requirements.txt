@@ -4,3 +4,4 @@ ujson
 redis
 hiredis
 asynctest
+django

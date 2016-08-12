@@ -107,16 +107,18 @@ class TradeStrategy(BaseModule):
                 cb.set_result(msg_list)
 
     async def start(self):
-        for inst_id in self.__inst_ids:
-            inst = (await self.query('Instrument', InstrumentID=inst_id))[0]
-            if inst['IsTrading'] == 0:
-                continue
-            self.__shares[inst['InstrumentID']].append(inst)
-            self.__instruments[inst['InstrumentID']]['info'] = inst
-            inst_fee = await self.query('InstrumentCommissionRate', InstrumentID=inst['InstrumentID'])
-            self.__instruments[inst['InstrumentID']]['fee'] = inst_fee[0]
-            inst_margin = await self.query('InstrumentMarginRate', InstrumentID=inst['InstrumentID'])
-            self.__instruments[inst['InstrumentID']]['margin'] = inst_margin[0]
+        inst_list = await self.query('Instrument')
+        print('len=', len(inst_list))
+        # for inst_id in self.__inst_ids:
+        #     inst = (await self.query('Instrument', InstrumentID=inst_id))[0]
+        #     if inst['IsTrading'] == 0:
+        #         continue
+        #     self.__shares[inst['InstrumentID']].append(inst)
+        #     self.__instruments[inst['InstrumentID']]['info'] = inst
+        #     inst_fee = await self.query('InstrumentCommissionRate', InstrumentID=inst['InstrumentID'])
+        #     self.__instruments[inst['InstrumentID']]['fee'] = inst_fee[0]
+        #     inst_margin = await self.query('InstrumentMarginRate', InstrumentID=inst['InstrumentID'])
+        #     self.__instruments[inst['InstrumentID']]['margin'] = inst_margin[0]
 
         account = await self.query('TradingAccount')
         self.update_account(account[0])
