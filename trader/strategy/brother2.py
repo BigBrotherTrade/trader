@@ -19,14 +19,16 @@ import re
 import ujson as json
 from collections import defaultdict
 import datetime
-
+import pytz
 import aioredis
+from decimal import Decimal
 
 from trader.utils import logger as my_logger
 from trader.strategy import BaseModule
 from trader.utils.func_container import param_function
 from trader.utils.read_config import *
 from trader.utils import ApiStruct
+from panel.models import *
 
 logger = my_logger.get_logger('CTPApi')
 HANDLER_TIME_OUT = config.getint('TRADE', 'command_timeout', fallback=10)
@@ -38,12 +40,12 @@ class TradeStrategy(BaseModule):
     __request_format = config.get('MSG_CHANNEL', 'request_format')
     __request_id = random.randint(0, 65535)
     __order_ref = random.randint(0, 999)
-    __inst_ids = ['IF1609']
+    __inst_ids = list()
     __instruments = defaultdict(dict)
     __current = 0  # 当前动态权益
     __pre_balance = 0  # 静态权益
     __cash = 0  # 可用资金
-    __shares = defaultdict(list)  # { instrument : [ posLong, posShort ] }
+    __shares = dict()  # { instrument : position }
     __cur_account = None
     __activeOrders = {}  # 未成交委托单
     __waiting_orders = {}
@@ -52,10 +54,11 @@ class TradeStrategy(BaseModule):
     __login_time = None
     # 提合约字母部分 IF1509 -> IF
     __re_extract = re.compile(r'([a-zA-Z]*)(\d+)')
-    # { inst_id : { 'info' : Instrument, 'fee' : InstrumentCommissionRate, 'margin' : InstrumentMarginRate } }
     __last_time = None
     __watch_pos = {}
     __ATR = {}
+    __broker = None
+    __strategy = None
 
     def update_order(self, order):
         if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
@@ -74,6 +77,10 @@ class TradeStrategy(BaseModule):
         self.__current = self.__pre_balance + account['CloseProfit'] + account['PositionProfit'] - account['Commission']
         self.__cash = account['Available']
         self.__cur_account = account
+        self.__broker.cash = Decimal(self.__cash)
+        self.__broker.current = Decimal(self.__current)
+        self.__broker.pre_balance = Decimal(self.__pre_balance)
+        self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
         logger.info("可用资金: {:,.0f} 静态权益: {:,.0f} 动态权益: {:,.0f}".format(self.__cash, self.__pre_balance, self.__current))
 
     def calc_fee(self, trade: dict):
@@ -84,13 +91,32 @@ class TradeStrategy(BaseModule):
         price = trade['Price']
         volume = trade['Volume']
         if action == ApiStruct.OF_Open:
-            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * self.__instruments[inst]['fee']['OpenRatioByMoney'] + volume * self.__instruments[inst]['fee']['OpenRatioByVolume']
+            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * \
+                   self.__instruments[inst]['fee']['OpenRatioByMoney'] + volume * \
+                   self.__instruments[inst]['fee']['OpenRatioByVolume']
         elif action == ApiStruct.OF_Close:
-            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * self.__instruments[inst]['fee']['CloseRatioByMoney'] + volume * self.__instruments[inst]['fee']['CloseRatioByVolume']
+            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * \
+                   self.__instruments[inst]['fee']['CloseRatioByMoney'] + volume * \
+                   self.__instruments[inst]['fee']['CloseRatioByVolume']
         elif action == ApiStruct.OF_CloseToday:
-            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * self.__instruments[inst]['fee']['CloseTodayRatioByMoney'] + volume * self.__instruments[inst]['fee']['CloseTodayRatioByVolume']
+            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * \
+                   self.__instruments[inst]['fee']['CloseTodayRatioByMoney'] + volume * \
+                   self.__instruments[inst]['fee']['CloseTodayRatioByVolume']
         else:
             return 0
+
+    def update_position(self):
+        for _, pos in self.__shares.items():
+            Trade.objects.update_or_create(
+                broker=self.__broker, strategy=self.__strategy, exchange=pos['ExchangeID'],
+                instrument=pos['InstrumentID'],
+                direction=DirectionType.LONG if pos['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
+                open_time=datetime.datetime.strptime(
+                    pos['OpenDate']+'09', '%Y%m%d%H').replace(tzinfo=pytz.FixedOffset(480)),
+                defaults={
+                    'shares': pos['Volume'], 'filled_shares': pos['Volume'],
+                    'avg_entry_price': Decimal(pos['OpenPrice']),
+                    'profit': Decimal(pos['PositionProfitByTrade']), 'frozen_margin': Decimal(pos['Margin'])})
 
     @staticmethod
     async def query_reader(ch: aioredis.Channel, cb: asyncio.Future):
@@ -107,8 +133,8 @@ class TradeStrategy(BaseModule):
                 cb.set_result(msg_list)
 
     async def start(self):
-        inst_list = await self.query('Instrument')
-        print('len=', len(inst_list))
+        # inst_list = await self.query('Instrument')
+        # print('len=', len(inst_list))
         # for inst_id in self.__inst_ids:
         #     inst = (await self.query('Instrument', InstrumentID=inst_id))[0]
         #     if inst['IsTrading'] == 0:
@@ -120,26 +146,39 @@ class TradeStrategy(BaseModule):
         #     inst_margin = await self.query('InstrumentMarginRate', InstrumentID=inst['InstrumentID'])
         #     self.__instruments[inst['InstrumentID']]['margin'] = inst_margin[0]
 
-        account = await self.query('TradingAccount')
-        self.update_account(account[0])
-
+        account = (await self.query('TradingAccount'))[0]
+        self.__broker = Broker.objects.get(username=account['AccountID'])
+        self.__strategy = self.__broker.strategy_set.get(name='大哥2.0')
+        self.update_account(account)
         pos_list = await self.query('InvestorPositionDetail')
         if pos_list:
             for pos in pos_list:
-                if pos['Volume'] > 0:
-                    self.__shares[pos['InstrumentID']].append(pos)
-
+                if pos['Volume'] <= 0:
+                    continue
+                old_pos = self.__shares.get(pos['InstrumentID'])
+                if old_pos is None:
+                    self.__shares[pos['InstrumentID']] = pos
+                else:
+                    old_pos['OpenPrice'] = (old_pos['OpenPrice'] * old_pos['Volume'] +
+                                            pos['OpenPrice'] * pos['Volume']) / (old_pos['Volume'] + pos['Volume'])
+                    old_pos['Volume'] += pos['Volume']
+                    old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
+                    old_pos['Margin'] += pos['Margin']
+            self.update_position()
         order_list = await self.query('Order')
         if order_list:
             for order in order_list:
-                if order['OrderStatus'] == ApiStruct.OST_NotTouched and order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
+                if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
+                                order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
                     self.__activeOrders[order['OrderRef']] = order
             logger.info("未成交订单: %s", self.__activeOrders)
 
-        await self.SubscribeMarketData(self.__inst_ids)
+        self.__inst_ids = [inst.main_code for inst in self.__strategy.instruments.all()]
+        # await self.SubscribeMarketData(self.__inst_ids)
 
     async def stop(self):
-        await self.UnSubscribeMarketData(self.__inst_ids)
+        pass
+        # await self.UnSubscribeMarketData(self.__inst_ids)
 
     def next_order_ref(self):
         self.__order_ref = 1 if self.__order_ref == 999 else self.__request_id + 1
@@ -154,9 +193,11 @@ class TradeStrategy(BaseModule):
     def getShares(self, instrument):
         # 这个函数只能处理持有单一方向仓位的情况，若同时持有多空的头寸，返回结果不正确
         shares = 0
+        pos_price = 0
         for pos in self.__shares[instrument]:
-            shares += pos['Volume'] * (-1 if pos.Direction == ApiStruct.D_Sell else 1)
-        return shares
+            pos_price += pos['Volume'] * pos['OpenPrice']
+            shares += pos['Volume'] * (-1 if pos['Direction'] == ApiStruct.D_Sell else 1)
+        return shares, pos_price / abs(shares), self.__shares[instrument][0]['OpenDate']
 
     def getPositions(self, inst_id):
         # 这个函数只能处理持有单一方向仓位的情况，若同时持有多空的头寸，返回结果不正确
@@ -430,6 +471,23 @@ class TradeStrategy(BaseModule):
         except Exception as ee:
             logger.error('OnRtnOrder failed: %s', repr(ee), exc_info=True)
 
+    @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnInstrumentStatus:*')
+    async def OnRtnInstrumentStatus(self, channel, status: dict):
+        """
+{"EnterReason":"1","EnterTime":"10:30:00","ExchangeID":"SHFE","ExchangeInstID":"ru","InstrumentID":"ru","InstrumentStatus":"2","SettlementGroupID":"00000001","TradingSegmentSN":27}
+        """
+        try:
+            product_code = channel.split(':')[-1]
+            if not self.__strategy.instruments.filter(product_code=product_code).exists():
+                return
+            if status['InstrumentStatus'] == ApiStruct.IS_AuctionOrdering:
+                # 判断是否需要开平仓
+                pass
+            elif status['InstrumentStatus'] == ApiStruct.IS_NoTrading:
+                logger.info('%s 进入休息时段', product_code)
+        except Exception as ee:
+            logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
+
     # def build_order_from_open_order(self, order, instrument_traits):
     #     ret = None
     #     if order.ContingentCondition != ApiStruct.CC_Immediately:
@@ -535,4 +593,3 @@ class TradeStrategy(BaseModule):
     #                 logger.info(u"报单已受理,ref=%s,inst=%s,price=%s,act=%s,status=%s", act_order.getId(),
     #                             act_order.getInstrument(), act_order.getAvgFillPrice(), act_order.getAction(),
     #                             st_order.OrderStatus)
-    #

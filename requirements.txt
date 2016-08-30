@@ -3,5 +3,5 @@ appdirs
 ujson
 redis
 hiredis
-asynctest
 django
+celery

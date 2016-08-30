@@ -13,8 +13,13 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+import sys
+import os
+import django
+sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
+os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
+django.setup()
 import asyncio
-
 from trader.strategy.brother2 import TradeStrategy
 from trader.utils.read_config import *
 import trader.utils.logger as my_logger
