@@ -13,6 +13,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+from decimal import Decimal
 
 
 def str_to_number(s):
@@ -22,3 +23,13 @@ def str_to_number(s):
         return int(s)
     except ValueError:
         return float(s)
+
+
+def myround(x: Decimal, base: Decimal):
+    prec = 0
+    s = str(round(base, 3) % 1)
+    s = s.rstrip('0').rstrip('.') if '.' in s else s
+    p1, *p2 = s.split('.')
+    if p2:
+        prec = len(p2[0])
+    return round(base * round(float(x) / base), prec)
