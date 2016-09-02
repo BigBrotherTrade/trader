@@ -512,7 +512,7 @@ class TradeStrategy(BaseModule):
     def roll_over(self, old_inst, new_inst):
         pass
 
-    @param_function(crontab='44 15 * * *')
+    @param_function(crontab='0 16 * * *')
     async def refresh_instrument(self):
         logger.info('更新账户')
         await self.query('TradingAccount')
@@ -709,7 +709,7 @@ class TradeStrategy(BaseModule):
 
     def calc_signal(self, inst: Instrument,
                     day: datetime.datetime = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))):
-        return 
+        return
         if inst not in self.__strategy.instruments.all():
             return
         break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
