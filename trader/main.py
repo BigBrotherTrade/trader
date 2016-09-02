@@ -16,7 +16,10 @@
 import sys
 import os
 import django
-sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
+if sys.platform == 'darwin':
+    sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
+else:
+    sys.path.append('/home/cyh/bigbrother/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 django.setup()
 import asyncio

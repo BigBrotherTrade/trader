@@ -14,6 +14,12 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import pytz
+import time
+import datetime
+from collections import defaultdict
+
+from croniter import croniter
 import asyncio
 from abc import abstractmethod, ABCMeta
 import aioredis
@@ -41,19 +47,43 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
         self.sub_tasks = list()
         self.sub_channels = list()
         self.channel_router = dict()
-        self._register_channel()
+        self.crontab_router = defaultdict(dict)
+        self.datetime = None
+        self.time = None
+        self.loop_time = None
 
-    def _register_channel(self):
+    def _register_param(self):
+        self.datetime = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+        self.time = time.time()
+        self.loop_time = self.io_loop.time()
         for fun_name, args in self.module_arg_dict.items():
-            if 'channel' not in args:
-                raise Exception("wrong param_function prototype, need param: 'channel'")
-            self.channel_router[args['channel']] = getattr(self, fun_name)
+            if 'crontab' in args:
+                key = args['crontab']
+                self.crontab_router[key]['func'] = getattr(self, fun_name)
+                self.crontab_router[key]['iter'] = croniter(args['crontab'], self.datetime)
+                self.crontab_router[key]['handle'] = None
+            elif 'channel' in args:
+                self.channel_router[args['channel']] = getattr(self, fun_name)
+
+    def _get_next(self, key):
+        return self.loop_time + (self.crontab_router[key]['iter'].get_next() - self.time)
+
+    def _call_next(self, key):
+        if self.crontab_router[key]['handle'] is not None:
+            self.crontab_router[key]['handle'].cancel()
+        self.crontab_router[key]['handle'] = self.io_loop.call_at(self._get_next(key), self._call_next, key)
+        self.io_loop.create_task(self.crontab_router[key]['func']())
 
     async def install(self):
         try:
-            self.sub_channels = await self.sub_client.psubscribe(*[a['channel'] for a in self.module_arg_dict.values()])
+            self._register_param()
+            self.sub_channels = await self.sub_client.psubscribe(*self.channel_router.keys())
             for channel in self.sub_channels:
                 self.sub_tasks.append(asyncio.ensure_future(self._msg_reader(channel), loop=self.io_loop))
+            for key, cron_dict in self.crontab_router.items():
+                if cron_dict['handle'] is not None:
+                    cron_dict['handle'].cancel()
+                cron_dict['handle'] = self.io_loop.call_at(self._get_next(key), self._call_next, key)
             await self.start()
             self.initialized = True
             logger.info('%s plugin installed', type(self).__name__)
@@ -63,10 +93,14 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
     async def uninstall(self):
         try:
             await self.stop()
-            await self.sub_client.punsubscribe(*[a['channel'] for a in self.module_arg_dict.values()])
+            await self.sub_client.punsubscribe(*self.channel_router.keys())
             # await asyncio.wait(self.sub_tasks, loop=self.io_loop)
             self.sub_tasks.clear()
             self.sub_client.close()
+            for key, cron_dict in self.crontab_router.items():
+                if self.crontab_router[key]['handle'] is not None:
+                    self.crontab_router[key]['handle'].cancel()
+                    self.crontab_router[key]['handle'] = None
             self.initialized = False
             logger.info('%s plugin uninstalled', type(self).__name__)
         except Exception as e:
