@@ -156,10 +156,11 @@ class Signal(models.Model):
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.CASCADE)
     instrument = models.ForeignKey(Instrument, verbose_name='品种', on_delete=models.CASCADE)
     type = models.CharField('信号类型', max_length=16, choices=SignalType.choices)
-    trigger_value = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='信号值', null=True)
+    trigger_value = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='信号值', null=True, blank=True)
+    volume = models.IntegerField('数量', null=True, blank=True)
     trigger_time = models.DateTimeField('发生时间')
     priority = models.IntegerField('优先级', choices=PriorityType.choices, default=PriorityType.Normal)
-    processed = models.BooleanField('已处理', default=False)
+    processed = models.BooleanField('已处理', default=False, blank=True)
 
     class Meta:
         verbose_name = '信号'
