@@ -18,4 +18,4 @@ from django.apps import AppConfig
 
 class PanelConfig(AppConfig):
     name = 'panel'
-    verbose_name = "控制面板"
+    verbose_name = "交易后台"
