@@ -31,6 +31,7 @@ import numpy as np
 import talib
 import ujson as json
 import aioredis
+import redis
 
 from trader.utils import logger as my_logger
 from trader.strategy import BaseModule
@@ -145,18 +146,6 @@ class TradeStrategy(BaseModule):
                 cb.set_result(msg_list)
 
     async def start(self):
-        # inst_list = await self.query('Instrument')
-        # print('len=', len(inst_list))
-        # for inst_id in self.__inst_ids:
-        #     inst = (await self.query('Instrument', InstrumentID=inst_id))[0]
-        #     if inst['IsTrading'] == 0:
-        #         continue
-        #     self.__shares[inst['InstrumentID']].append(inst)
-        #     self.__instruments[inst['InstrumentID']]['info'] = inst
-        #     inst_fee = await self.query('InstrumentCommissionRate', InstrumentID=inst['InstrumentID'])
-        #     self.__instruments[inst['InstrumentID']]['fee'] = inst_fee[0]
-        #     inst_margin = await self.query('InstrumentMarginRate', InstrumentID=inst['InstrumentID'])
-        #     self.__instruments[inst['InstrumentID']]['margin'] = inst_margin[0]
         getcontext().prec = 3
         self.async_query('TradingAccount')
         self.async_query('InvestorPositionDetail')
@@ -167,12 +156,11 @@ class TradeStrategy(BaseModule):
                                 order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
                     self.__activeOrders[order['OrderRef']] = order
             logger.info("未成交订单: %s", self.__activeOrders)
-        self.async_query('Trade', InstrumentID='v1701', TradeID='9999caf')
         await self.SubscribeMarketData(self.__inst_ids)
 
     async def stop(self):
-        pass
-        await self.UnSubscribeMarketData(self.__inst_ids)
+        if self.__inst_ids:
+            await self.UnSubscribeMarketData(self.__inst_ids)
 
     def next_order_ref(self):
         self.__order_ref = 1 if self.__order_ref == 999 else self.__request_id + 1
@@ -489,24 +477,11 @@ class TradeStrategy(BaseModule):
     async def OnRspQryTradingAccount(self, _, account: dict):
         self.update_account(account)
 
-    @param_function(channel='MSG:CTP:RSP:TRADE:OnRspQryInstrumentMarginRate:*')
-    async def OnRspQryInstrumentMarginRate(self, _, margin: dict):
-        self.update_account(margin)
-
-    @param_function(channel='MSG:CTP:RSP:TRADE:OnRspQryInstrumentCommissionRate:*')
-    async def OnRspQryInstrumentCommissionRate(self, _, fee: dict):
-        self.update_account(fee)
-
-    @param_function(channel='MSG:CTP:RSP:TRADE:OnRspQryInstrument:*')
-    async def OnRspQryInstrument(self, _, fee: dict):
-        self.update_account(fee)
-
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnInstrumentStatus:*')
     async def OnRtnInstrumentStatus(self, channel, status: dict):
         """
 {"EnterReason":"1","EnterTime":"10:30:00","ExchangeID":"SHFE","ExchangeInstID":"ru","InstrumentID":"ru","InstrumentStatus":"2","SettlementGroupID":"00000001","TradingSegmentSN":27}
         """
-        return
         try:
             product_code = channel.split(':')[-1]
             inst = self.__strategy.instruments.filter(product_code=product_code).first()
@@ -537,8 +512,24 @@ class TradeStrategy(BaseModule):
     def roll_over(self, old_inst, new_inst):
         pass
 
-    @param_function(crontab='0 16 * * *')
+    @param_function(crontab='44 15 * * *')
     async def refresh_instrument(self):
+        logger.info('更新账户')
+        await self.query('TradingAccount')
+        logger.info('更新持仓')
+        pos_list = await self.query('InvestorPositionDetail')
+        for pos in pos_list:
+            if pos['Volume'] > 0:
+                old_pos = self.__shares.get(pos['InstrumentID'])
+                if old_pos is None:
+                    self.__shares[pos['InstrumentID']] = pos
+                else:
+                    old_pos['OpenPrice'] = (old_pos['OpenPrice'] * old_pos['Volume'] +
+                                            pos['OpenPrice'] * pos['Volume']) / (old_pos['Volume'] + pos['Volume'])
+                    old_pos['Volume'] += pos['Volume']
+                    old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
+                    old_pos['Margin'] += pos['Margin']
+        self.update_position()
         logger.info('更新合约列表..')
         inst_set = defaultdict(set)
         inst_dict = defaultdict(dict)
@@ -550,6 +541,7 @@ class TradeStrategy(BaseModule):
                     inst_set[inst['ProductID']].add(inst['InstrumentID'])
                     inst_dict[inst['ProductID']]['exchange'] = inst['ExchangeID']
                     inst_dict[inst['ProductID']]['product_code'] = inst['ProductID']
+                    inst_dict[inst['ProductID']]['multiple'] = inst['VolumeMultiple']
                     if 'name' not in inst_dict[inst['ProductID']]:
                         inst_dict[inst['ProductID']]['name'] = regex.match(inst['InstrumentName']).group(1)
         for code, data in inst_dict.items():
@@ -558,7 +550,9 @@ class TradeStrategy(BaseModule):
                 'exchange': data['exchange'],
                 'name': data['name'],
                 'all_inst': ','.join(sorted(inst_set[code])),
+                'volume_multiple': data['multiple']
             })
+            await self.update_inst_margin(inst)
         logger.info('更新合约列表完成!')
 
     @param_function(crontab='0 17 * * *')
@@ -585,17 +579,30 @@ class TradeStrategy(BaseModule):
             for inst_obj in Instrument.objects.all():
                 logger.info('计算连续合约, 交易信号: %s', inst_obj.name)
                 self.calc_main_inst(inst_obj, day)
-                self.update_inst_margin(inst_obj)
                 self.calc_signal(inst_obj, day)
         except Exception as e:
             logger.error('collect_quote failed: %s', e, exc_info=True)
         logger.info('盘后计算完毕!')
 
-    def update_inst_margin(self, inst):
+    async def update_inst_margin(self, inst: Instrument):
         """
         更新每一个合约的保证金
         """
-        pass
+        try:
+            fee = (await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code))[0]
+            inst.fee_money = Decimal(fee['CloseRatioByMoney'])
+            inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
+            margin = (await self.query('InstrumentMarginRate', InstrumentID=inst.main_code))[0]
+            inst.margin_rate = Decimal(margin['LongMarginRatioByMoney'])
+            tick = json.loads(self.redis_client.get(inst.main_code))
+            inst.up_limit_ratio = (Decimal(tick['UpperLimitPrice']) -
+                                   Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
+            inst.down_limit_ratio = (Decimal(tick['PreSettlementPrice']) -
+                                     Decimal(tick['LowerLimitPrice'])) / Decimal(tick['PreSettlementPrice'])
+            inst.save(update_fields=['fee_money', 'fee_volume', 'margin_rate',
+                                     'up_limit_ratio', 'down_limit_ratio'])
+        except Exception as e:
+            logger.error('update_inst_margin failed: %s', e, exc_info=True)
 
     def calc_main_inst(
             self, inst: Instrument,
@@ -702,6 +709,7 @@ class TradeStrategy(BaseModule):
 
     def calc_signal(self, inst: Instrument,
                     day: datetime.datetime = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))):
+        return 
         if inst not in self.__strategy.instruments.all():
             return
         break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
@@ -709,7 +717,7 @@ class TradeStrategy(BaseModule):
         long_n = self.__strategy.param_set.get(code='LongPeriod').int_value
         short_n = self.__strategy.param_set.get(code='ShortPeriod').int_value
         stop_n = self.__strategy.param_set.get(code='StopLoss').int_value
-        # risk = self.__strategy.param_set.get(code='Risk').float_value
+        risk = self.__strategy.param_set.get(code='Risk').float_value
         last_bars = MainBar.objects.filter(
             exchange=inst.exchange, product_code=inst.product_code, time__lte=day
         ).order_by('time').values_list('open', 'high', 'low', 'close')
