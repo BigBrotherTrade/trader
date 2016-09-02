@@ -449,8 +449,8 @@ class TradeStrategy(BaseModule):
         """
         try:
             inst = channel.split(':')[-1]
-            tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
-            logger.info('inst=%s, tick: %s', inst, tick)
+            # tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
+            # logger.info('inst=%s, tick: %s', inst, tick)
         except Exception as ee:
             logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
@@ -506,6 +506,7 @@ class TradeStrategy(BaseModule):
         """
 {"EnterReason":"1","EnterTime":"10:30:00","ExchangeID":"SHFE","ExchangeInstID":"ru","InstrumentID":"ru","InstrumentStatus":"2","SettlementGroupID":"00000001","TradingSegmentSN":27}
         """
+        return
         try:
             product_code = channel.split(':')[-1]
             inst = self.__strategy.instruments.filter(product_code=product_code).first()
