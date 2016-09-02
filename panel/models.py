@@ -131,13 +131,14 @@ class Order(models.Model):
 class Instrument(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
     name = models.CharField('名称', max_length=32, null=True, blank=True)
-    product_code = models.CharField('品种代码', max_length=16, unique=True)
-    all_inst = models.CharField('合约月份汇总', max_length=128, null=True, blank=True)
+    product_code = models.CharField('代码', max_length=16, unique=True)
+    all_inst = models.CharField('品种列表', max_length=128, null=True, blank=True)
     main_code = models.CharField('主力合约', max_length=16, null=True, blank=True)
-    last_main = models.CharField('上个主力合约', max_length=16, null=True, blank=True)
+    last_main = models.CharField('上个主力', max_length=16, null=True, blank=True)
     change_time = models.DateTimeField('切换时间', null=True, blank=True)
-    night_trade = models.BooleanField('夜盘交易', default=False)
+    night_trade = models.BooleanField('夜盘', default=False)
     volume_multiple = models.IntegerField('合约乘数', null=True, blank=True)
+    price_tick = models.DecimalField('最小变动', max_digits=8, decimal_places=3, null=True, blank=True)
     margin_rate = models.DecimalField('保证金率', max_digits=6, decimal_places=5, null=True, blank=True)
     fee_money = models.DecimalField('金额手续费', max_digits=6, decimal_places=5, null=True, blank=True)
     fee_volume = models.DecimalField('手数手续费', max_digits=6, decimal_places=2, null=True, blank=True)
@@ -156,7 +157,8 @@ class Signal(models.Model):
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.CASCADE)
     instrument = models.ForeignKey(Instrument, verbose_name='品种', on_delete=models.CASCADE)
     type = models.CharField('信号类型', max_length=16, choices=SignalType.choices)
-    trigger_value = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='信号值', null=True, blank=True)
+    trigger_value = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='触发值', null=True, blank=True)
+    price = models.DecimalField('价格', max_digits=12, decimal_places=3, null=True, blank=True)
     volume = models.IntegerField('数量', null=True, blank=True)
     trigger_time = models.DateTimeField('发生时间')
     priority = models.IntegerField('优先级', choices=PriorityType.choices, default=PriorityType.Normal)
@@ -179,6 +181,7 @@ class MainBar(models.Model):
     high = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最高价')
     low = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最低价')
     close = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='收盘价')
+    settlement = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='结算价', null=True)
     volume = models.IntegerField('成交量')
     open_interest = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='持仓量')
     basis = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='基差', null=True)
@@ -191,11 +194,6 @@ class MainBar(models.Model):
         return '{}.{}'.format(self.exchange, self.product_code)
 
 
-# class Indicator(models.Model):
-#     main_bar = models.ForeignKey(MainBar, verbose_name='主连K线', on_delete=models.CASCADE)
-#
-
-
 class DailyBar(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
     code = models.CharField('品种代码', max_length=8, null=True)
@@ -205,6 +203,7 @@ class DailyBar(models.Model):
     high = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最高价')
     low = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最低价')
     close = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='收盘价')
+    settlement = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='结算价', null=True)
     volume = models.IntegerField('成交量')
     open_interest = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='持仓量')
 
