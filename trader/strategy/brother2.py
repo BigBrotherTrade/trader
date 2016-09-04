@@ -53,6 +53,7 @@ class TradeStrategy(BaseModule):
     __cash = 0  # 可用资金
     __shares = dict()  # { instrument : position }
     __cur_account = None
+    __margin = 0  # 占用保证金
     __activeOrders = {}  # 未成交委托单
     __waiting_orders = {}
     __cancel_orders = {}
@@ -83,6 +84,7 @@ class TradeStrategy(BaseModule):
         # 动态权益=静态权益+平仓盈亏+持仓盈亏-手续费
         self.__current = self.__pre_balance + Decimal(account['CloseProfit']) + \
             Decimal(account['PositionProfit']) - Decimal(account['Commission'])
+        self.__margin = Decimal(account['CurrMargin'])
         self.__cash = Decimal(account['Available'])
         self.__cur_account = account
         self.__broker = Broker.objects.get(username=account['AccountID'])
@@ -148,6 +150,8 @@ class TradeStrategy(BaseModule):
                 cb.set_result(msg_list)
 
     async def start(self):
+        # await self.query('TradingAccount')
+        # await self.update_equity()
         self.async_query('TradingAccount')
         self.async_query('InvestorPositionDetail')
         order_list = await self.query('Order')
@@ -630,6 +634,7 @@ class TradeStrategy(BaseModule):
             nav = self.__current / unit
             accumulated = (self.__current - dividend) / (unit - dividend)
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
+                'used_margin': self.__margin,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
     async def update_inst_fee(self, inst: Instrument):
         """

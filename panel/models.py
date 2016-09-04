@@ -61,6 +61,7 @@ class Performance(models.Model):
     NAV = models.DecimalField(verbose_name='单位净值', max_digits=8, decimal_places=3, null=True)
     accumulated = models.DecimalField(verbose_name='累计净值', max_digits=8, decimal_places=3, null=True)
     dividend = models.DecimalField(verbose_name='分红', max_digits=12, decimal_places=2, null=True)
+    used_margin = models.DecimalField(verbose_name='占用保证金', null=True, max_digits=12, decimal_places=2)
 
     class Meta:
         verbose_name = '绩效'
