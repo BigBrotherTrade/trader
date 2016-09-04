@@ -22,7 +22,7 @@ import datetime
 import pytz
 from decimal import Decimal
 
-from django.db.models import Q, Max, Min
+from django.db.models import Q, Max, Min, Sum
 import numpy as np
 import talib
 import ujson as json
@@ -157,7 +157,7 @@ class TradeStrategy(BaseModule):
                                 order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
                     self.__activeOrders[order['OrderRef']] = order
             logger.info("未成交订单: %s", self.__activeOrders)
-        # await self.SubscribeMarketData(self.__inst_ids)
+        await self.SubscribeMarketData(self.__inst_ids)
 
     async def stop(self):
         pass
@@ -603,14 +603,34 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='0 10 * * *')
     async def collect_tick_start(self):
-        if await is_trading_day():
+        _, trading = await is_trading_day()
+        if trading:
             await self.SubscribeMarketData(self.__inst_ids)
 
     @param_function(crontab='0 11 * * *')
     async def collect_tick_stop(self):
-        if await is_trading_day():
+        _, trading = await is_trading_day()
+        if trading:
             await self.UnSubscribeMarketData(self.__inst_ids)
 
+    @param_function(crontab='30 15 * * *')
+    async def update_equity(self):
+        today, trading = await is_trading_day()
+        if trading:
+            dividend = Performance.objects.filter(
+                broker=self.__broker, day__lt=today.date()).aggregate(Sum('dividend'))['dividend__sum']
+            if dividend is None:
+                dividend = Decimal(0)
+            perform = Performance.objects.filter(
+                broker=self.__broker, day__lt=today.date()).order_by('-day').first()
+            if perform is None:
+                unit = Decimal(1000000)
+            else:
+                unit = perform.unit_count
+            nav = self.__current / unit
+            accumulated = (self.__current - dividend) / (unit - dividend)
+            Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
+                'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
     async def update_inst_fee(self, inst: Instrument):
         """
         更新每一个合约的手续费
