@@ -18,25 +18,22 @@ import random
 import re
 from collections import defaultdict
 import datetime
-import math
+
 import pytz
-import xml.etree.ElementTree as ET
 from decimal import Decimal
 
-from django.db.models import F, Q, Max, Min
-import requests
-from bs4 import BeautifulSoup
+from django.db.models import Q, Max, Min
 import numpy as np
 import talib
 import ujson as json
 import aioredis
 
-from trader.utils import logger as my_logger
 from trader.strategy import BaseModule
 from trader.utils.func_container import param_function
 from trader.utils.read_config import *
-from trader.utils import ApiStruct
-from trader.utils import myround
+from trader.utils import logger as my_logger, calc_main_inst, is_auction_time
+from trader.utils import ApiStruct, myround, is_trading_day, update_from_shfe, update_from_dce, \
+    update_from_czce, update_from_cffex
 from panel.models import *
 
 logger = my_logger.get_logger('CTPApi')
@@ -95,7 +92,7 @@ class TradeStrategy(BaseModule):
         self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
         logger.info("可用资金: {:,.0f} 静态权益: {:,.0f} 动态权益: {:,.0f}".format(self.__cash, self.__pre_balance, self.__current))
         self.__strategy = self.__broker.strategy_set.get(name='大哥2.0')
-        self.__inst_ids = [inst.main_code for inst in Instrument.objects.all()]
+        self.__inst_ids = [inst.product_code for inst in self.__strategy.instruments.all()]
 
     def calc_fee(self, trade: dict):
         inst = trade['InstrumentID']
@@ -121,15 +118,19 @@ class TradeStrategy(BaseModule):
 
     def update_position(self):
         for _, pos in self.__shares.items():
+            inst = Instrument.objects.filter(
+                exchange=pos['ExchangeID'], product_code=re.findall('[A-Za-z]+', pos['InstrumentID'])[0]).first()
             Trade.objects.update_or_create(
-                broker=self.__broker, strategy=self.__strategy, exchange=pos['ExchangeID'],
-                instrument=pos['InstrumentID'],
+                broker=self.__broker, strategy=self.__strategy, instrument=inst,
+                code=pos['InstrumentID'],
                 direction=DirectionType.LONG if pos['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
                 open_time=datetime.datetime.strptime(
                     pos['OpenDate']+'09', '%Y%m%d%H').replace(tzinfo=pytz.FixedOffset(480)),
                 defaults={
                     'shares': pos['Volume'], 'filled_shares': pos['Volume'],
                     'avg_entry_price': Decimal(pos['OpenPrice']),
+                    'cost': pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money * inst.volume_multiple
+                        + pos['Volume'] * inst.fee_volume,
                     'profit': Decimal(pos['PositionProfitByTrade']), 'frozen_margin': Decimal(pos['Margin'])})
 
     @staticmethod
@@ -156,11 +157,12 @@ class TradeStrategy(BaseModule):
                                 order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
                     self.__activeOrders[order['OrderRef']] = order
             logger.info("未成交订单: %s", self.__activeOrders)
-        await self.SubscribeMarketData(self.__inst_ids)
+        # await self.SubscribeMarketData(self.__inst_ids)
 
     async def stop(self):
-        if self.__inst_ids:
-            await self.UnSubscribeMarketData(self.__inst_ids)
+        pass
+        # if self.__inst_ids:
+        #     await self.UnSubscribeMarketData(self.__inst_ids)
 
     def next_order_ref(self):
         self.__order_ref = 1 if self.__order_ref == 999 else self.__request_id + 1
@@ -279,54 +281,54 @@ class TradeStrategy(BaseModule):
                 sub_client.close()
             return None
 
-    async def buy(self, inst: dict, limit_price: float, volume: int):
+    async def buy(self, inst: Instrument, limit_price: Decimal, volume: int):
         rst = await self.ReqOrderInsert(
-            InstrumentID=inst['InstrumentID'],
+            InstrumentID=inst.main_code,
             VolumeTotalOriginal=volume,
-            LimitPrice=limit_price,
+            LimitPrice=float(limit_price),
             Direction=ApiStruct.D_Buy,  # 买
             CombOffsetFlag=ApiStruct.OF_Open,  # 开
             ContingentCondition=ApiStruct.CC_Immediately,  # 立即
             TimeCondition=ApiStruct.TC_GFD)  # 当日有效
         return rst
 
-    async def sell(self, inst: dict, limit_price: float, volume: int):
-        pos_info = self.getPositions(inst['InstrumentID'])
+    async def sell(self, pos: Trade, limit_price: Decimal, volume: int):
         # 上期所区分平今和平昨
         close_flag = ApiStruct.OF_Close
-        if pos_info['OpenDate'] == datetime.datetime.today().strftime('%Y%m%d') and pos_info['ExchangeID'] == 'SHFE':
+        if pos.open_time.date() == datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)).date() \
+                and pos.instrument.exchange == ExchangeType.SHFE:
             close_flag = ApiStruct.OF_CloseToday
         rst = await self.ReqOrderInsert(
-            InstrumentID=inst['InstrumentID'],
+            InstrumentID=pos.code,
             VolumeTotalOriginal=volume,
-            LimitPrice=limit_price,
+            LimitPrice=float(limit_price),
             Direction=ApiStruct.D_Sell,  # 卖
             CombOffsetFlag=close_flag,  # 平
             ContingentCondition=ApiStruct.CC_Immediately,  # 立即
             TimeCondition=ApiStruct.TC_GFD)  # 当日有效
         return rst
 
-    async def sell_short(self, inst: dict, limit_price: float, volume: int):
+    async def sell_short(self, inst: Instrument, limit_price: Decimal, volume: int):
         rst = await self.ReqOrderInsert(
-            InstrumentID=inst['InstrumentID'],
+            InstrumentID=inst.main_code,
             VolumeTotalOriginal=volume,
-            LimitPrice=limit_price,
+            LimitPrice=float(limit_price),
             Direction=ApiStruct.D_Sell,  # 卖
             CombOffsetFlag=ApiStruct.OF_Open,  # 开
             ContingentCondition=ApiStruct.CC_Immediately,  # 立即
             TimeCondition=ApiStruct.TC_GFD)  # 当日有效
         return rst
 
-    async def buy_cover(self, inst: dict, limit_price: float, volume: int):
-        pos_info = self.getPositions(inst['InstrumentID'])
+    async def buy_cover(self, pos: Trade, limit_price: Decimal, volume: int):
         # 上期所区分平今和平昨
         close_flag = ApiStruct.OF_Close
-        if pos_info['OpenDate'] == datetime.datetime.today().strftime('%Y%m%d') and pos_info['ExchangeID'] == 'SHFE':
+        if pos.open_time.date() == datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)).date() \
+                and pos.instrument.exchange == ExchangeType.SHFE:
             close_flag = ApiStruct.OF_CloseToday
         rst = await self.ReqOrderInsert(
-            InstrumentID=inst['InstrumentID'],
+            InstrumentID=pos.code,
             VolumeTotalOriginal=volume,
-            LimitPrice=limit_price,
+            LimitPrice=float(limit_price),
             Direction=ApiStruct.D_Buy,  # 买
             CombOffsetFlag=close_flag,  # 平
             ContingentCondition=ApiStruct.CC_Immediately,  # 立即
@@ -407,40 +409,40 @@ class TradeStrategy(BaseModule):
                 sub_client.close()
             return None
 
-    @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
-    async def OnRtnDepthMarketData(self, channel, tick: dict):
-        """
-        'PreOpenInterest': 50990,
-        'TradingDay': '20160803',
-        'SettlementPrice': 1.7976931348623157e+308,
-        'AskVolume1': 40,
-        'Volume': 11060,
-        'LastPrice': 37740,
-        'LowestPrice': 37720,
-        'ClosePrice': 1.7976931348623157e+308,
-        'ActionDay': '20160803',
-        'UpdateMillisec': 0,
-        'PreClosePrice': 37840,
-        'LowerLimitPrice': 35490,
-        'OpenInterest': 49460,
-        'UpperLimitPrice': 40020,
-        'AveragePrice': 189275.7233273056,
-        'HighestPrice': 38230,
-        'BidVolume1': 10,
-        'UpdateTime': '11:03:12',
-        'InstrumentID': 'cu1608',
-        'PreSettlementPrice': 37760,
-        'OpenPrice': 37990,
-        'BidPrice1': 37740,
-        'Turnover': 2093389500,
-        'AskPrice1': 37750
-        """
-        try:
-            inst = channel.split(':')[-1]
-            # tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
-            # logger.info('inst=%s, tick: %s', inst, tick)
-        except Exception as ee:
-            logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
+    # @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
+    # async def OnRtnDepthMarketData(self, channel, tick: dict):
+    #     """
+    #     'PreOpenInterest': 50990,
+    #     'TradingDay': '20160803',
+    #     'SettlementPrice': 1.7976931348623157e+308,
+    #     'AskVolume1': 40,
+    #     'Volume': 11060,
+    #     'LastPrice': 37740,
+    #     'LowestPrice': 37720,
+    #     'ClosePrice': 1.7976931348623157e+308,
+    #     'ActionDay': '20160803',
+    #     'UpdateMillisec': 0,
+    #     'PreClosePrice': 37840,
+    #     'LowerLimitPrice': 35490,
+    #     'OpenInterest': 49460,
+    #     'UpperLimitPrice': 40020,
+    #     'AveragePrice': 189275.7233273056,
+    #     'HighestPrice': 38230,
+    #     'BidVolume1': 10,
+    #     'UpdateTime': '11:03:12',
+    #     'InstrumentID': 'cu1608',
+    #     'PreSettlementPrice': 37760,
+    #     'OpenPrice': 37990,
+    #     'BidPrice1': 37740,
+    #     'Turnover': 2093389500,
+    #     'AskPrice1': 37750
+    #     """
+    #     try:
+    #         inst = channel.split(':')[-1]
+    #         tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
+    #         logger.info('inst=%s, tick: %s', inst, tick)
+    #     except Exception as ee:
+    #         logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnTrade:*')
     async def OnRtnTrade(self, channel, trade: dict):
@@ -485,32 +487,39 @@ class TradeStrategy(BaseModule):
         try:
             product_code = channel.split(':')[-1]
             inst = self.__strategy.instruments.filter(product_code=product_code).first()
-            if inst is None:
+            if inst is None or product_code not in self.__inst_ids:
                 return
-            now = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
-            if status['InstrumentStatus'] == ApiStruct.IS_AuctionOrdering and 8 <= now.hour <= 9:
-                # 判断是否需要开平仓
-                pos = Trade.objects.filter(
-                    close_time__isnull=True, exchange=inst.exchange,
-                    instrument__regex='^{}[0-9]+'.format(product_code), shares__gt=0).first()
-                last_bar = MainBar.objects.filter(
-                    exchange=inst.exchange, product_code=product_code).order_by('-time').first()
-                signal = Signal.objects.filter(
-                    strategy=self.__strategy, instrument=inst, trigger_time__date=last_bar.time,
-                    processed=False).first()
+            if is_auction_time(inst, status):
+                signal = Signal.objects.filter(strategy=self.__strategy, instrument=inst, processed=False).first()
+                if signal == SignalType.BUY:
+                    self.buy(inst, signal.price, signal.volume)
+                elif signal == SignalType.SELL_SHORT:
+                    self.sell_short(inst, signal.price, signal.volume)
+                elif signal == SignalType.BUY_COVER:
+                    pos = Trade.objects.filter(
+                        close_time__isnull=True, exchange=inst.exchange, direction=DirectionType.SHORT,
+                        instrument__product_code=product_code, shares__gt=0).first()
+                    self.buy_cover(pos, signal.price, signal.volume)
+                elif signal == SignalType.SELL:
+                    pos = Trade.objects.filter(
+                        close_time__isnull=True, exchange=inst.exchange, direction=DirectionType.LONG,
+                        instrument__product_code=product_code, shares__gt=0).first()
+                    self.sell(pos, signal.price, signal.volume)
+                elif signal == SignalType.ROLLOVER:
+                    pos = Trade.objects.filter(
+                        close_time__isnull=True, exchange=inst.exchange,
+                        instrument__product_code=product_code, shares__gt=0).first()
+                    if pos.direction == DirectionType.LONG:
+                        self.sell(pos, signal.trigger_value, signal.volume)
+                        self.buy(inst, signal.price, signal.volume)
+                    else:
+                        self.buy_cover(pos, signal.trigger_value, signal.volume)
+                        self.sell_short(inst, signal.price, signal.volume)
                 if signal is not None:
-                    if signal.type == SignalType.ROLLOVER and pos is not None:
-                        self.roll_over(pos.instrument, inst.main_code)
-                    elif signal.type == SignalType.BUY and pos is None:
-                        pass
-
-            elif status['InstrumentStatus'] == ApiStruct.IS_NoTrading:
-                logger.info('%s 进入休息时段', product_code)
+                    signal.processed = True
+                    signal.save(update_fields=['processed'])
         except Exception as ee:
             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
-
-    def roll_over(self, old_inst, new_inst):
-        pass
 
     @param_function(crontab='20 15 * * *')
     async def refresh_instrument(self):
@@ -543,18 +552,20 @@ class TradeStrategy(BaseModule):
                     inst_dict[inst['ProductID']]['product_code'] = inst['ProductID']
                     inst_dict[inst['ProductID']]['multiple'] = inst['VolumeMultiple']
                     inst_dict[inst['ProductID']]['price_tick'] = inst['PriceTick']
+                    inst_dict[inst['ProductID']]['margin'] = inst['LongMarginRatio']
                     if 'name' not in inst_dict[inst['ProductID']]:
                         inst_dict[inst['ProductID']]['name'] = regex.match(inst['InstrumentName']).group(1)
         for code, data in inst_dict.items():
-            logger.info('更新合约保证金手续费: %s', code)
+            logger.info('更新合约保证金: %s', code)
             inst, _ = Instrument.objects.update_or_create(product_code=code, defaults={
                 'exchange': data['exchange'],
                 'name': data['name'],
                 'all_inst': ','.join(sorted(inst_set[code])),
                 'volume_multiple': data['multiple'],
-                'price_tick': data['price_tick']
+                'price_tick': data['price_tick'],
+                'margin_rate': data['margin']
             })
-            await self.update_inst_margin(inst)
+            await self.update_inst_fee(inst)
         logger.info('更新合约列表完成!')
 
     @param_function(crontab='0 17 * * *')
@@ -570,33 +581,53 @@ class TradeStrategy(BaseModule):
         try:
             day = datetime.datetime.today()
             day = day.replace(tzinfo=pytz.FixedOffset(480))
-            if not self.is_trading_day(day):
+            _, trading = await is_trading_day(day)
+            if not trading:
                 logger.info('今日是非交易日, 不计算任何数据。')
                 return
             logger.info('每日盘后计算, day: %s, 获取交易所日线数据..', day)
-            self.fetch_daily_bar(day, 'SHFE')
-            self.fetch_daily_bar(day, 'DCE')
-            self.fetch_daily_bar(day, 'CZCE')
-            self.fetch_daily_bar(day, 'CFFEX')
+            tasks = [
+                self.io_loop.create_task(update_from_shfe(day)),
+                self.io_loop.create_task(update_from_dce(day)),
+                self.io_loop.create_task(update_from_czce(day)),
+                self.io_loop.create_task(update_from_cffex(day)),
+            ]
+            await asyncio.wait(tasks)
             for inst_obj in Instrument.objects.all():
                 logger.info('计算连续合约, 交易信号: %s', inst_obj.name)
-                self.calc_main_inst(inst_obj, day)
+                calc_main_inst(inst_obj, day)
                 self.calc_signal(inst_obj, day)
         except Exception as e:
             logger.error('collect_quote failed: %s', e, exc_info=True)
         logger.info('盘后计算完毕!')
 
-    async def update_inst_margin(self, inst: Instrument):
+    @param_function(crontab='0 10 * * *')
+    async def collect_tick_start(self):
+        if await is_trading_day():
+            await self.SubscribeMarketData(self.__inst_ids)
+
+    @param_function(crontab='0 11 * * *')
+    async def collect_tick_stop(self):
+        if await is_trading_day():
+            await self.UnSubscribeMarketData(self.__inst_ids)
+
+    async def update_inst_fee(self, inst: Instrument):
         """
-        更新每一个合约的保证金
+        更新每一个合约的手续费
         """
         try:
-            fee = (await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code))[0]
-            inst.fee_money = Decimal(fee['CloseRatioByMoney'])
-            inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
-            margin = (await self.query('InstrumentMarginRate', InstrumentID=inst.main_code))[0]
-            inst.margin_rate = Decimal(margin['LongMarginRatioByMoney'])
-            tick = json.loads(self.redis_client.get(inst.main_code))
+            fee = (await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code))
+            if fee:
+                fee = fee[0]
+                inst.fee_money = Decimal(fee['CloseRatioByMoney'])
+                inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
+            all_insts = self.redis_client.keys(inst.product_code+'*')
+            tar_code = inst.main_code
+            for code in all_insts:
+                if re.findall('[A-Za-z]+', code)[0] == inst.product_code:
+                    tar_code = code
+                    break
+            tick = json.loads(self.redis_client.get(tar_code))
             inst.up_limit_ratio = (Decimal(tick['UpperLimitPrice']) -
                                    Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
             inst.up_limit_ratio = round(inst.up_limit_ratio, 3)
@@ -606,117 +637,12 @@ class TradeStrategy(BaseModule):
             inst.save(update_fields=['fee_money', 'fee_volume', 'margin_rate',
                                      'up_limit_ratio', 'down_limit_ratio'])
         except Exception as e:
-            logger.error('update_inst_margin failed: %s', e, exc_info=True)
-
-    def calc_main_inst(
-            self, inst: Instrument,
-            day: datetime.datetime = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))):
-        """
-        [["2016-07-18","2116.000","2212.000","2106.000","2146.000","34"],...]
-        """
-        updated = False
-        if inst.main_code is not None:
-            expire_date = self.calc_expire_date(inst.main_code, day)
-        else:
-            expire_date = day.strftime('%y%m')
-        # 条件1: 成交量最大 & (成交量>1万 & 持仓量>1万 or 股指) = 主力合约
-        if inst.exchange == ExchangeType.CFFEX:
-            check_bar = DailyBar.objects.filter(
-                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                expire_date__gte=expire_date,
-                time=day).order_by('-volume').first()
-        else:
-            check_bar = DailyBar.objects.filter(
-                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                expire_date__gte=expire_date,
-                time=day, volume__gte=10000, open_interest__gte=10000).order_by('-volume').first()
-        # 条件2: 不满足条件1但是连续3天成交量最大 = 主力合约
-        if check_bar is None:
-            check_bars = list(DailyBar.objects.raw(
-                "SELECT a.* FROM panel_dailybar a INNER JOIN(SELECT time, max(volume) v, max(open_interest) i "
-                "FROM panel_dailybar WHERE EXCHANGE=%s and CODE RLIKE %s GROUP BY time) b ON a.time = b.time "
-                "AND a.volume = b.v AND a.open_interest = b.i "
-                "where a.exchange=%s and code Rlike %s AND a.time <= %s ORDER BY a.time desc LIMIT 3",
-                [inst.exchange, '^{}[0-9]+'.format(inst.product_code)] * 2 + [day.strftime('%y/%m/%d')]))
-            if len(set(bar.code for bar in check_bars)) == 1:
-                check_bar = check_bars[0]
-            else:
-                check_bar = None
-
-        # 之前没有主力合约, 取当前成交量最大的作为主力
-        if inst.main_code is None:
-            if check_bar is None:
-                check_bar = DailyBar.objects.filter(
-                    exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                    expire_date__gte=expire_date, time=day).order_by('-volume', '-open_interest').first()
-            inst.main_code = check_bar.code
-            inst.change_time = day
-            inst.save(update_fields=['main_code', 'change_time'])
-            self.store_main_bar(check_bar)
-        # 主力合约发生变化, 做换月处理
-        elif check_bar is not None and inst.main_code != check_bar.code and check_bar.code > inst.main_code:
-            inst.last_main = inst.main_code
-            inst.main_code = check_bar.code
-            inst.change_time = day
-            inst.save(update_fields=['last_main', 'main_code', 'change_time'])
-            self.store_main_bar(check_bar)
-            self.handle_rollover(inst, check_bar)
-            updated = True
-        else:
-            bar = DailyBar.objects.get(exchange=inst.exchange, code=inst.main_code, time=day)
-            # 若当前主力合约当天成交量为0, 需要换下一个合约
-            if bar.volume == 0 or bar.open_interest == Decimal(0):
-                check_bar = DailyBar.objects.filter(
-                    exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                    expire_date__gte=expire_date, time=day).order_by('-volume', '-open_interest').first()
-                if bar.code != check_bar.code:
-                    inst.last_main = inst.main_code
-                    inst.main_code = check_bar.code
-                    inst.change_time = day
-                    inst.save(update_fields=['last_main', 'main_code', 'change_time'])
-                    self.store_main_bar(check_bar)
-                    self.handle_rollover(inst, check_bar)
-                    updated = True
-                else:
-                    self.store_main_bar(bar)
-            else:
-                self.store_main_bar(bar)
-        return inst.main_code, updated
-
-    @staticmethod
-    def handle_rollover(inst: Instrument, new_bar: DailyBar):
-        """
-        换月处理, 基差=新合约收盘价-旧合约收盘价, 从今日起之前的所有连续合约的OHLC加上基差
-        """
-        product_code = re.findall('[A-Za-z]+', new_bar.code)[0]
-        old_bar = DailyBar.objects.get(exchange=inst.exchange, code=inst.last_main, time=new_bar.time)
-        main_bar = MainBar.objects.get(
-            exchange=inst.exchange, product_code=product_code, time=new_bar.time)
-        basis = new_bar.close - old_bar.close
-        main_bar.basis = basis
-        basis = float(basis)
-        main_bar.save(update_fields=['basis'])
-        MainBar.objects.filter(exchange=inst.exchange, product_code=product_code, time__lte=new_bar.time).update(
-            open=F('open') + basis, high=F('high') + basis,
-            low=F('low') + basis, close=F('close') + basis, settlement=F('settlement')+basis)
-
-    @staticmethod
-    def store_main_bar(bar: DailyBar):
-        MainBar.objects.update_or_create(
-            exchange=bar.exchange, product_code=re.findall('[A-Za-z]+', bar.code)[0], time=bar.time, defaults={
-                'cur_code': bar.code,
-                'open': bar.open,
-                'high': bar.high,
-                'low': bar.low,
-                'close': bar.close,
-                'settlement': bar.settlement,
-                'volume': bar.volume,
-                'open_interest': bar.open_interest})
+            logger.error('update_inst_fee failed: %s', e, exc_info=True)
 
     def calc_signal(self, inst: Instrument,
                     day: datetime.datetime = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))):
         try:
-            if inst not in self.__strategy.instruments.all():
+            if inst.product_code not in self.__inst_ids:
                 return
             break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
             atr_n = self.__strategy.param_set.get(code='AtrPeriod').int_value
@@ -736,15 +662,13 @@ class TradeStrategy(BaseModule):
             low_line = np.amin(arr[-break_n:, 3])
             buy_sig = short_trend > long_trend and close > high_line
             sell_sig = short_trend < long_trend and close < low_line
-            roll_over = inst.change_time.date() == day.date()
-            if roll_over:
-                cur_code = inst.last_main
-            else:
-                cur_code = inst.main_code
             # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
             pos = Trade.objects.filter(
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
-                exchange=inst.exchange, instrument=cur_code, shares__gt=0, open_time__lt=day).first()
+                instrument=inst, shares__gt=0, open_time__lt=day).first()
+            roll_over = False
+            if pos is not None:
+                roll_over = pos.code != inst.main_code
             signal = None
             signal_value = None
             price = None
@@ -753,15 +677,16 @@ class TradeStrategy(BaseModule):
                 # 多头持仓
                 if pos.direction == DirectionType.LONG:
                     hh = float(MainBar.objects.filter(
-                        exchange=inst.exchange, product_code=re.findall('[A-Za-z]+', pos.instrument)[0],
+                        exchange=inst.exchange, product_code=pos.instrument.product_code,
                         time__gte=pos.open_time, time__lte=day).aggregate(Max('high'))['high__max'])
                     # 多头止损
                     if close <= hh - atr * stop_n:
                         signal = SignalType.SELL
+                        # 止损时 signal_value 为止损价
                         signal_value = hh - atr * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
-                            exchange=pos.exchange, code=pos.instrument, time=day.date()).first()
+                            exchange=inst.exchange, code=pos.code, time=day.date()).first()
                         price = myround(last_bar.settlement * (Decimal(1)-inst.down_limit_ratio),
                                         inst.price_tick)
                     # 多头换月
@@ -769,18 +694,19 @@ class TradeStrategy(BaseModule):
                         signal = SignalType.ROLLOVER
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
-                            exchange=pos.exchange, code=pos.instrument, time=day.date()).first()
+                            exchange=inst.exchange, code=pos.code, time=day.date()).first()
+                        # 换月时 signal_value 为旧合约的平仓价
                         signal_value = myround(last_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
                                                inst.price_tick)
-                        last_bar = DailyBar.objects.filter(
-                            exchange=pos.exchange, code=inst.main_code, time=day.date()).first()
-                        price = myround(last_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
+                        new_bar = DailyBar.objects.filter(
+                            exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                        price = myround(new_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
                                         inst.price_tick)
 
                 # 空头持仓
                 else:
                     ll = float(MainBar.objects.filter(
-                        exchange=inst.exchange, product_code=re.findall('[A-Za-z]+', pos.instrument)[0],
+                        exchange=inst.exchange, product_code=pos.instrument.product_code,
                         time__gte=pos.open_time, time__lte=day).aggregate(Min('low'))['low__min'])
                     # 空头止损
                     if close >= ll + atr * stop_n:
@@ -788,7 +714,7 @@ class TradeStrategy(BaseModule):
                         signal_value = ll + atr * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
-                            exchange=pos.exchange, code=pos.instrument, time=day.date()).first()
+                            exchange=inst.exchange, code=pos.code, time=day.date()).first()
                         price = myround(last_bar.settlement * (Decimal(1) + inst.down_limit_ratio),
                                         inst.price_tick)
                     # 空头换月
@@ -796,30 +722,30 @@ class TradeStrategy(BaseModule):
                         signal = SignalType.ROLLOVER
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
-                            exchange=pos.exchange, code=pos.instrument, time=day.date()).first()
+                            exchange=inst.exchange, code=pos.code, time=day.date()).first()
                         signal_value = myround(last_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
                                                inst.price_tick)
-                        last_bar = DailyBar.objects.filter(
-                            exchange=pos.exchange, code=inst.main_code, time=day.date()).first()
-                        price = myround(last_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
+                        new_bar = DailyBar.objects.filter(
+                            exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                        price = myround(new_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
                                         inst.price_tick)
             # 做多
             elif buy_sig:
                 signal = SignalType.BUY
                 volume = self.__current * risk // (Decimal(atr) * Decimal(inst.volume_multiple))
                 signal_value = high_line
-                last_bar = DailyBar.objects.filter(
+                new_bar = DailyBar.objects.filter(
                     exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = myround(last_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
+                price = myround(new_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
                                 inst.price_tick)
             # 做空
             elif sell_sig:
                 signal = SignalType.SELL_SHORT
                 volume = self.__current * risk // (Decimal(atr) * Decimal(inst.volume_multiple))
                 signal_value = low_line
-                last_bar = DailyBar.objects.filter(
+                new_bar = DailyBar.objects.filter(
                     exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = myround(last_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
+                price = myround(new_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
                                 inst.price_tick)
             if signal is not None:
                 Signal.objects.update_or_create(
@@ -828,187 +754,6 @@ class TradeStrategy(BaseModule):
                         'priority': PriorityType.Normal, 'processed': False})
         except Exception as e:
             logger.error('calc_signal failed: %s', e, exc_info=True)
-
-    def fetch_daily_bar(self, day: datetime.datetime, market: str):
-        error_data = None
-        try:
-            day_str = day.strftime('%Y%m%d')
-            if market == ExchangeType.SHFE:
-                rst = requests.get('http://www.shfe.com.cn/data/dailydata/kx/kx{}.dat'.format(day_str))
-                rst_json = rst.json()
-                for inst_data in rst_json['o_curinstrument']:
-                    """
-{'OPENINTERESTCHG': -11154, 'CLOSEPRICE': 36640, 'SETTLEMENTPRICE': 36770, 'OPENPRICE': 36990,
-'PRESETTLEMENTPRICE': 37080, 'ZD2_CHG': -310, 'DELIVERYMONTH': '1609', 'VOLUME': 51102,
-'PRODUCTSORTNO': 10, 'ZD1_CHG': -440, 'OPENINTEREST': 86824, 'ORDERNO': 0, 'PRODUCTNAME': '铜                  ',
-'LOWESTPRICE': 36630, 'PRODUCTID': 'cu_f    ', 'HIGHESTPRICE': 37000}
-                    """
-                    error_data = inst_data
-                    if inst_data['DELIVERYMONTH'] == '小计' or inst_data['PRODUCTID'] == '总计':
-                        continue
-                    if '_' not in inst_data['PRODUCTID']:
-                        continue
-                    DailyBar.objects.update_or_create(
-                        code=inst_data['PRODUCTID'].split('_')[0] + inst_data['DELIVERYMONTH'],
-                        exchange=market, time=day, defaults={
-                            'expire_date': inst_data['DELIVERYMONTH'],
-                            'open': inst_data['OPENPRICE'] if inst_data['OPENPRICE'] else inst_data['CLOSEPRICE'],
-                            'high': inst_data['HIGHESTPRICE'] if inst_data['HIGHESTPRICE'] else
-                            inst_data['CLOSEPRICE'],
-                            'low': inst_data['LOWESTPRICE'] if inst_data['LOWESTPRICE']
-                            else inst_data['CLOSEPRICE'],
-                            'close': inst_data['CLOSEPRICE'],
-                            'settlement': inst_data['SETTLEMENTPRICE'] if inst_data['SETTLEMENTPRICE'] else
-                            inst_data['PRESETTLEMENTPRICE'],
-                            'volume': inst_data['VOLUME'] if inst_data['VOLUME'] else 0,
-                            'open_interest': inst_data['OPENINTEREST'] if inst_data['OPENINTEREST'] else 0})
-            elif market == ExchangeType.DCE:
-                rst = requests.post('http://www.dce.com.cn/PublicWeb/MainServlet', {
-                    'action': 'Pu00011_result', 'Pu00011_Input.trade_date': day_str, 'Pu00011_Input.variety': 'all',
-                    'Pu00011_Input.trade_type': 0})
-                soup = BeautifulSoup(rst.text, 'lxml')
-                for tr in soup.select("tr")[2:-4]:
-                    inst_data = list(tr.stripped_strings)
-                    error_data = inst_data
-                    """
-[0'商品名称', 1'交割月份', 2'开盘价', 3'最高价', 4'最低价', 5'收盘价', 6'前结算价', 7'结算价', 8'涨跌', 9'涨跌1', 10'成交量', 11'持仓量', 12'持仓量变化', 13'成交额']
-['豆一', '1609', '3,699', '3,705', '3,634', '3,661', '3,714', '3,668', '-53', '-46', '5,746', '5,104', '-976', '21,077.13']
-                    """
-                    if '小计' in inst_data[0]:
-                        continue
-                    DailyBar.objects.update_or_create(
-                        code=DCE_NAME_CODE[inst_data[0]] + inst_data[1],
-                        exchange=market, time=day, defaults={
-                            'expire_date': inst_data[1],
-                            'open': inst_data[2].replace(',', '') if inst_data[2] != '-' else
-                            inst_data[5].replace(',', ''),
-                            'high': inst_data[3].replace(',', '') if inst_data[3] != '-' else
-                            inst_data[5].replace(',', ''),
-                            'low': inst_data[4].replace(',', '') if inst_data[4] != '-' else
-                            inst_data[5].replace(',', ''),
-                            'close': inst_data[5].replace(',', ''),
-                            'settlement': inst_data[7].replace(',', '') if inst_data[7] != '-' else
-                            inst_data[6].replace(',', ''),
-                            'volume': inst_data[10].replace(',', ''),
-                            'open_interest': inst_data[11].replace(',', '')})
-            elif market == ExchangeType.CZCE:
-                rst = requests.get(
-                    'http://www.czce.com.cn/portal/DFSStaticFiles/Future/{}/{}/FutureDataDaily.txt'.format(
-                        day.year, day_str))
-                if rst.status_code == 404:
-                    rst = requests.get(
-                        'http://www.czce.com.cn/portal/exchange/{}/datadaily/{}.txt'.format(
-                            day.year, day_str))
-                for lines in rst.content.decode('gbk').split('\r\n')[1:-3]:
-                    if '小计' in lines or '品种' in lines:
-                        continue
-                    inst_data = [x.strip() for x in lines.split('|' if '|' in lines else ',')]
-                    error_data = inst_data
-                    """
-[0'品种月份', 1'昨结算', 2'今开盘', 3'最高价', 4'最低价', 5'今收盘', 6'今结算', 7'涨跌1', 8'涨跌2', 9'成交量(手)', 10'空盘量', 11'增减量', 12'成交额(万元)', 13'交割结算价']
-['CF601', '11,970.00', '11,970.00', '11,970.00', '11,800.00', '11,870.00', '11,905.00', '-100.00',
-'-65.00', '13,826', '59,140', '-10,760', '82,305.24', '']
-                    """
-                    DailyBar.objects.update_or_create(
-                        code=inst_data[0],
-                        exchange=market, time=day, defaults={
-                            'expire_date': self.calc_expire_date(inst_data[0], day),
-                            'open': inst_data[2].replace(',', '') if Decimal(inst_data[2].replace(',', '')) > 0.1
-                            else inst_data[5].replace(',', ''),
-                            'high': inst_data[3].replace(',', '') if Decimal(inst_data[3].replace(',', '')) > 0.1
-                            else inst_data[5].replace(',', ''),
-                            'low': inst_data[4].replace(',', '') if Decimal(inst_data[4].replace(',', '')) > 0.1
-                            else inst_data[5].replace(',', ''),
-                            'close': inst_data[5].replace(',', ''),
-                            'settlement': inst_data[6].replace(',', '') if Decimal(inst_data[6].replace(',', '')) > 0.1 else inst_data[1].replace(',', ''),
-                            'volume': inst_data[9].replace(',', ''),
-                            'open_interest': inst_data[10].replace(',', '')})
-            elif market == ExchangeType.CFFEX:
-                rst = requests.get('http://www.cffex.com.cn/fzjy/mrhq/{}/index.xml'.format(
-                    day.strftime('%Y%m/%d')))
-                tree = ET.fromstring(rst.text)
-                for inst_data in tree.getchildren():
-                    """
-<dailydata>
-<instrumentid>IC1609</instrumentid>
-<tradingday>20160824</tradingday>
-<openprice>6336.8</openprice>
-<highestprice>6364.4</highestprice>
-<lowestprice>6295.6</lowestprice>
-<closeprice>6314.2</closeprice>
-<openinterest>24703.0</openinterest>
-<presettlementprice>6296.6</presettlementprice>
-<settlementpriceIF>6317.6</settlementpriceIF>
-<settlementprice>6317.6</settlementprice>
-<volume>10619</volume>
-<turnover>1.3440868E10</turnover>
-<productid>IC</productid>
-<delta/>
-<segma/>
-<expiredate>20160919</expiredate>
-</dailydata>
-                    """
-                    error_data = list(inst_data.itertext())
-                    DailyBar.objects.update_or_create(
-                        code=inst_data.findtext('instrumentid').strip(),
-                        exchange=market, time=day, defaults={
-                            'expire_date': inst_data.findtext('expiredate')[2:6],
-                            'open': inst_data.findtext('openprice').replace(',', '') if inst_data.findtext(
-                                'openprice') else inst_data.findtext('closeprice').replace(',', ''),
-                            'high': inst_data.findtext('highestprice').replace(',', '') if inst_data.findtext(
-                                'highestprice') else inst_data.findtext('closeprice').replace(',', ''),
-                            'low': inst_data.findtext('lowestprice').replace(',', '') if inst_data.findtext(
-                                'lowestprice') else inst_data.findtext('closeprice').replace(',', ''),
-                            'close': inst_data.findtext('closeprice').replace(',', ''),
-                            'settlement': inst_data.findtext('settlementprice').replace(',', '')
-                            if inst_data.findtext('settlementprice') else
-                            inst_data.findtext('presettlementprice').replace(',', ''),
-                            'volume': inst_data.findtext('volume').replace(',', ''),
-                            'open_interest': inst_data.findtext('openinterest').replace(',', '')})
-            return True
-        except Exception as e:
-            logger.error('%s, row=%s', repr(e), error_data, exc_info=True)
-            return False
-
-    def fetch_today_bars(self):
-        day = datetime.datetime.today()
-        if self.is_trading_day(day):
-            self.fetch_daily_bar(day, 'SHFE')
-            self.fetch_daily_bar(day, 'DCE')
-            self.fetch_daily_bar(day, 'CZCE')
-            self.fetch_daily_bar(day, 'CFFEX')
-
-    @staticmethod
-    def is_trading_day(day: datetime.datetime = datetime.datetime.today()):
-        """
-        判断是否是交易日, 方法是从中金所获取今日的K线数据,判断http的返回码(如果出错会返回302重定向至404页面),
-        因为开市前也可能返回302, 所以适合收市后(下午)使用
-        :return: bool
-        """
-        rst = requests.get('http://www.cffex.com.cn/fzjy/mrhq/{}/index.xml'.format(day.strftime('%Y%m/%d')),
-                           allow_redirects=False)
-        return rst.status_code != 302
-
-    @staticmethod
-    def calc_expire_date(inst_code: str, day: datetime.datetime):
-        expire_date = int(re.findall('\d+', inst_code)[0])
-        if expire_date < 1000:
-            year_exact = math.floor(day.year % 100 / 10)
-            if expire_date < 100 and day.year % 10 == 9:
-                year_exact += 1
-            expire_date += year_exact * 1000
-        return expire_date
-
-    def create_main(self, inst: Instrument):
-        print('processing ', inst.product_code)
-        for day in DailyBar.objects.all().order_by('time').values_list('time', flat=True).distinct():
-            print(day, self.calc_main_inst(inst, datetime.datetime.combine(
-                day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
-
-    def create_main_all(self):
-        for inst in Instrument.objects.filter(id__gte=15):
-            self.create_main(inst)
-        print('all done!')
 
     # def build_order_from_open_order(self, order, instrument_traits):
     #     ret = None

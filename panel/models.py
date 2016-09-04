@@ -140,7 +140,7 @@ class Instrument(models.Model):
     volume_multiple = models.IntegerField('合约乘数', null=True, blank=True)
     price_tick = models.DecimalField('最小变动', max_digits=8, decimal_places=3, null=True, blank=True)
     margin_rate = models.DecimalField('保证金率', max_digits=6, decimal_places=5, null=True, blank=True)
-    fee_money = models.DecimalField('金额手续费', max_digits=6, decimal_places=5, null=True, blank=True)
+    fee_money = models.DecimalField('金额手续费', max_digits=7, decimal_places=6, null=True, blank=True)
     fee_volume = models.DecimalField('手数手续费', max_digits=6, decimal_places=2, null=True, blank=True)
     up_limit_ratio = models.DecimalField('涨停幅度', max_digits=3, decimal_places=2, null=True, blank=True)
     down_limit_ratio = models.DecimalField('跌停幅度', max_digits=3, decimal_places=2, null=True, blank=True)
@@ -218,12 +218,12 @@ class DailyBar(models.Model):
 class Trade(models.Model):
     broker = models.ForeignKey(Broker, verbose_name='账户', on_delete=models.CASCADE)
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.SET_NULL, null=True, blank=True)
+    instrument = models.ForeignKey(Instrument, verbose_name='品种', on_delete=models.CASCADE)
     open_order = models.ForeignKey(Order, verbose_name='开仓报单', on_delete=models.CASCADE,
                                    related_name='open_order', null=True, blank=True)
     close_order = models.ForeignKey(Order, verbose_name='平仓报单', on_delete=models.CASCADE,
                                     related_name='close_order', null=True, blank=True)
-    exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
-    instrument = models.CharField('品种代码', max_length=8)
+    code = models.CharField('合约代码', max_length=8, null=True, blank=True)
     direction = models.CharField('方向', max_length=8, choices=DirectionType.choices)
     open_time = models.DateTimeField('开仓日期')
     close_time = models.DateTimeField('平仓日期', null=True, blank=True)
@@ -233,11 +233,11 @@ class Trade(models.Model):
     avg_exit_price = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='平仓均价', null=True, blank=True)
     profit = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='持仓盈亏', null=True)
     frozen_margin = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='冻结保证金', null=True)
-    cost = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='手续费', null=True)
+    cost = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='手续费', null=True)
 
     class Meta:
         verbose_name = '交易记录'
         verbose_name_plural = '交易记录列表'
 
     def __str__(self):
-        return '{}-{}手'.format(self.instrument, self.shares)
+        return '{}{}{}手'.format(self.instrument, self.direction, self.shares)
