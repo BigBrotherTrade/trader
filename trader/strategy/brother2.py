@@ -150,14 +150,14 @@ class TradeStrategy(BaseModule):
                 cb.set_result(msg_list)
 
     async def start(self):
-        # await self.query('TradingAccount')
+        await self.query('TradingAccount')
+        await self.query('InvestorPositionDetail')
         # await self.collect_tick_stop()
-        # day = datetime.datetime.strptime('20160902', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+        # await self.collect_quote()
+        # day = datetime.datetime.strptime('20160905', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
         # for inst in self.__strategy.instruments.all():
-        #     # self.calc_signal(inst, day)
-        #     self.process_signal(inst)
-        self.async_query('TradingAccount')
-        self.async_query('InvestorPositionDetail')
+        #     self.calc_signal(inst, day)
+            # self.process_signal(inst)
         # order_list = await self.query('Order')
         # if order_list:
         #     for order in order_list:
