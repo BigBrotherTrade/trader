@@ -146,22 +146,26 @@ class TradeStrategy(BaseModule):
                     msg_list.append(msg_dict)
             else:
                 msg_list.append(msg_dict)
-            if msg_dict['bIsLast'] and not cb.done():
+            if ('bIsLast' not in msg_dict or msg_dict['bIsLast']) and not cb.done():
                 cb.set_result(msg_list)
 
     async def start(self):
         # await self.query('TradingAccount')
-        # await self.update_equity()
+        # await self.collect_tick_stop()
+        # day = datetime.datetime.strptime('20160902', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+        # for inst in self.__strategy.instruments.all():
+        #     # self.calc_signal(inst, day)
+        #     self.process_signal(inst)
         self.async_query('TradingAccount')
         self.async_query('InvestorPositionDetail')
-        order_list = await self.query('Order')
-        if order_list:
-            for order in order_list:
-                if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
-                                order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
-                    self.__activeOrders[order['OrderRef']] = order
-            logger.info("未成交订单: %s", self.__activeOrders)
-        await self.SubscribeMarketData(self.__inst_ids)
+        # order_list = await self.query('Order')
+        # if order_list:
+        #     for order in order_list:
+        #         if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
+        #                         order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
+        #             self.__activeOrders[order['OrderRef']] = order
+        #     logger.info("未成交订单: %s", self.__activeOrders)
+        # await self.SubscribeMarketData(self.__inst_ids)
 
     async def stop(self):
         pass
@@ -169,7 +173,7 @@ class TradeStrategy(BaseModule):
         #     await self.UnSubscribeMarketData(self.__inst_ids)
 
     def next_order_ref(self):
-        self.__order_ref = 1 if self.__order_ref == 999 else self.__request_id + 1
+        self.__order_ref = 1 if self.__order_ref == 999 else self.__order_ref + 1
         now = datetime.datetime.now()
         return '{:02}{:02}{:02}{:03}{:03}'.format(
             now.hour, now.minute, now.second, int(now.microsecond / 1000), self.__order_ref)
@@ -361,7 +365,7 @@ class TradeStrategy(BaseModule):
             order_ref = self.next_order_ref()
             kwargs['nRequestId'] = request_id
             kwargs['OrderRef'] = order_ref
-            channel_name1 = self.__trade_response_format.format('OnRspOrderInsert', request_id)
+            channel_name1 = self.__trade_response_format.format('OnRtnOrder', order_ref)
             channel_name2 = self.__trade_response_format.format('OnRspError', request_id)
             ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
             cb = self.io_loop.create_future()
@@ -494,34 +498,7 @@ class TradeStrategy(BaseModule):
             if inst is None or product_code not in self.__inst_ids:
                 return
             if is_auction_time(inst, status):
-                signal = Signal.objects.filter(strategy=self.__strategy, instrument=inst, processed=False).first()
-                if signal == SignalType.BUY:
-                    self.buy(inst, signal.price, signal.volume)
-                elif signal == SignalType.SELL_SHORT:
-                    self.sell_short(inst, signal.price, signal.volume)
-                elif signal == SignalType.BUY_COVER:
-                    pos = Trade.objects.filter(
-                        close_time__isnull=True, exchange=inst.exchange, direction=DirectionType.SHORT,
-                        instrument__product_code=product_code, shares__gt=0).first()
-                    self.buy_cover(pos, signal.price, signal.volume)
-                elif signal == SignalType.SELL:
-                    pos = Trade.objects.filter(
-                        close_time__isnull=True, exchange=inst.exchange, direction=DirectionType.LONG,
-                        instrument__product_code=product_code, shares__gt=0).first()
-                    self.sell(pos, signal.price, signal.volume)
-                elif signal == SignalType.ROLLOVER:
-                    pos = Trade.objects.filter(
-                        close_time__isnull=True, exchange=inst.exchange,
-                        instrument__product_code=product_code, shares__gt=0).first()
-                    if pos.direction == DirectionType.LONG:
-                        self.sell(pos, signal.trigger_value, signal.volume)
-                        self.buy(inst, signal.price, signal.volume)
-                    else:
-                        self.buy_cover(pos, signal.trigger_value, signal.volume)
-                        self.sell_short(inst, signal.price, signal.volume)
-                if signal is not None:
-                    signal.processed = True
-                    signal.save(update_fields=['processed'])
+                self.process_signal(inst)
         except Exception as ee:
             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
 
@@ -607,15 +584,23 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='0 10 * * *')
     async def collect_tick_start(self):
-        _, trading = await is_trading_day()
+        day, trading = await is_trading_day()
+        logger.info('订阅全品种行情, %s %s', day, trading)
         if trading:
-            await self.SubscribeMarketData(self.__inst_ids)
+            inst_set = list()
+            for inst in Instrument.objects.all():
+                inst_set += inst.all_inst.split(',')
+            await self.SubscribeMarketData(inst_set)
 
     @param_function(crontab='0 11 * * *')
     async def collect_tick_stop(self):
-        _, trading = await is_trading_day()
+        day, trading = await is_trading_day()
+        logger.info('取消订阅全品种行情, %s %s', day, trading)
         if trading:
-            await self.UnSubscribeMarketData(self.__inst_ids)
+            inst_set = list()
+            for inst in Instrument.objects.all():
+                inst_set += inst.all_inst.split(',')
+            await self.UnSubscribeMarketData(inst_set)
 
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
@@ -646,13 +631,7 @@ class TradeStrategy(BaseModule):
                 fee = fee[0]
                 inst.fee_money = Decimal(fee['CloseRatioByMoney'])
                 inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
-            all_insts = self.redis_client.keys(inst.product_code+'*')
-            tar_code = inst.main_code
-            for code in all_insts:
-                if re.findall('[A-Za-z]+', code)[0] == inst.product_code:
-                    tar_code = code
-                    break
-            tick = json.loads(self.redis_client.get(tar_code))
+            tick = json.loads(self.redis_client.get(inst.main_code))
             inst.up_limit_ratio = (Decimal(tick['UpperLimitPrice']) -
                                    Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
             inst.up_limit_ratio = round(inst.up_limit_ratio, 3)
@@ -669,22 +648,22 @@ class TradeStrategy(BaseModule):
         try:
             if inst.product_code not in self.__inst_ids:
                 return
-            break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
+            break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value + 1
             atr_n = self.__strategy.param_set.get(code='AtrPeriod').int_value
             long_n = self.__strategy.param_set.get(code='LongPeriod').int_value
             short_n = self.__strategy.param_set.get(code='ShortPeriod').int_value
             stop_n = self.__strategy.param_set.get(code='StopLoss').int_value
             risk = self.__strategy.param_set.get(code='Risk').float_value
             last_bars = MainBar.objects.filter(
-                exchange=inst.exchange, product_code=inst.product_code, time__lte=day
+                exchange=inst.exchange, product_code=inst.product_code, time__lte=day.date()
             ).order_by('time').values_list('open', 'high', 'low', 'close')
             arr = np.array(last_bars, dtype=float)
             close = arr[-1, 3]
             atr = talib.ATR(arr[:, 1], arr[:, 2], arr[:, 3], timeperiod=atr_n)[-1]
             short_trend = talib.SMA(arr[:, 3], timeperiod=short_n)[-1]
             long_trend = talib.SMA(arr[:, 3], timeperiod=long_n)[-1]
-            high_line = np.amax(arr[-break_n:, 3])
-            low_line = np.amin(arr[-break_n:, 3])
+            high_line = np.amax(arr[-break_n:-1, 3])
+            low_line = np.amin(arr[-break_n:-1, 3])
             buy_sig = short_trend > long_trend and close > high_line
             sell_sig = short_trend < long_trend and close < low_line
             # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
@@ -712,8 +691,7 @@ class TradeStrategy(BaseModule):
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                        price = myround(last_bar.settlement * (Decimal(1)-inst.down_limit_ratio),
-                                        inst.price_tick)
+                        price = self.calc_down_limit(inst, last_bar)
                     # 多头换月
                     elif roll_over:
                         signal = SignalType.ROLLOVER
@@ -721,13 +699,10 @@ class TradeStrategy(BaseModule):
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
                         # 换月时 signal_value 为旧合约的平仓价
-                        signal_value = myround(last_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
-                                               inst.price_tick)
+                        signal_value = self.calc_down_limit(inst, last_bar)
                         new_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                        price = myround(new_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
-                                        inst.price_tick)
-
+                        price = self.calc_up_limit(inst, new_bar)
                 # 空头持仓
                 else:
                     ll = float(MainBar.objects.filter(
@@ -740,20 +715,17 @@ class TradeStrategy(BaseModule):
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                        price = myround(last_bar.settlement * (Decimal(1) + inst.down_limit_ratio),
-                                        inst.price_tick)
+                        price = self.calc_up_limit(inst, last_bar)
                     # 空头换月
                     elif roll_over:
                         signal = SignalType.ROLLOVER
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                        signal_value = myround(last_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
-                                               inst.price_tick)
+                        signal_value = self.calc_up_limit(inst, last_bar)
                         new_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                        price = myround(new_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
-                                        inst.price_tick)
+                        price = self.calc_down_limit(inst, new_bar)
             # 做多
             elif buy_sig:
                 signal = SignalType.BUY
@@ -761,8 +733,7 @@ class TradeStrategy(BaseModule):
                 signal_value = high_line
                 new_bar = DailyBar.objects.filter(
                     exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = myround(new_bar.settlement * (Decimal(1) + inst.up_limit_ratio),
-                                inst.price_tick)
+                price = self.calc_up_limit(inst, new_bar)
             # 做空
             elif sell_sig:
                 signal = SignalType.SELL_SHORT
@@ -770,8 +741,7 @@ class TradeStrategy(BaseModule):
                 signal_value = low_line
                 new_bar = DailyBar.objects.filter(
                     exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = myround(new_bar.settlement * (Decimal(1) - inst.down_limit_ratio),
-                                inst.price_tick)
+                price = self.calc_down_limit(inst, new_bar)
             if signal is not None:
                 Signal.objects.update_or_create(
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
@@ -885,3 +855,55 @@ class TradeStrategy(BaseModule):
     #                 logger.info(u"报单已受理,ref=%s,inst=%s,price=%s,act=%s,status=%s", act_order.getId(),
     #                             act_order.getInstrument(), act_order.getAvgFillPrice(), act_order.getAction(),
     #                             st_order.OrderStatus)
+
+    def process_signal(self, inst: Instrument):
+        signal = Signal.objects.filter(strategy=self.__strategy, instrument=inst, processed=False).first()
+        if signal is None:
+            return
+        if signal.type == SignalType.BUY:
+            logger.info('%s 开多%s手 价格: %s', inst, signal.volume, signal.price)
+            self.io_loop.create_task(self.buy(inst, signal.price, signal.volume))
+        elif signal.type == SignalType.SELL_SHORT:
+            logger.info('%s 开空%s手 价格: %s', inst, signal.volume, signal.price)
+            self.io_loop.create_task(self.sell_short(inst, signal.price, signal.volume))
+        elif signal.type == SignalType.BUY_COVER:
+            pos = Trade.objects.filter(
+                close_time__isnull=True, direction=DirectionType.SHORT,
+                instrument=inst, shares__gt=0).first()
+            logger.info('%s 平空%s手 价格: %s', pos.instrument, signal.volume, signal.price)
+            self.io_loop.create_task(self.buy_cover(pos, signal.price, signal.volume))
+        elif signal.type == SignalType.SELL:
+            pos = Trade.objects.filter(
+                close_time__isnull=True, direction=DirectionType.LONG,
+                instrument=inst, shares__gt=0).first()
+            logger.info('%s 平多%s手 价格: %s', pos.instrument, signal.volume, signal.price)
+            self.io_loop.create_task(self.sell(pos, signal.price, signal.volume))
+        elif signal.type == SignalType.ROLLOVER:
+            pos = Trade.objects.filter(
+                close_time__isnull=True, instrument=inst, shares__gt=0).first()
+            if pos.direction == DirectionType.LONG:
+                logger.info('%s->%s 多头换月%s手', pos.code, inst.main_code, signal.volume)
+                self.io_loop.create_task(self.sell(pos, signal.trigger_value, signal.volume))
+                self.io_loop.create_task(self.buy(inst, signal.price, signal.volume))
+            else:
+                logger.info('%s->%s 空头换月%s手', pos.code, inst.main_code, signal.volume)
+                self.io_loop.create_task(self.buy_cover(pos, signal.trigger_value, signal.volume))
+                self.io_loop.create_task(self.sell_short(inst, signal.price, signal.volume))
+        signal.processed = True
+        signal.save(update_fields=['processed'])
+
+    def calc_up_limit(self, inst: Instrument, bar: DailyBar):
+        tick = json.loads(self.redis_client.get(bar.code))
+        ratio = (Decimal(tick['UpperLimitPrice']) -
+                 Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
+        ratio = Decimal(round(ratio, 3))
+        price = myround(bar.settlement * (Decimal(1) + ratio), inst.price_tick)
+        return price - inst.price_tick
+
+    def calc_down_limit(self, inst: Instrument, bar: DailyBar):
+        tick = json.loads(self.redis_client.get(bar.code))
+        ratio = (Decimal(tick['PreSettlementPrice']) -
+                 Decimal(tick['LowerLimitPrice'])) / Decimal(tick['PreSettlementPrice'])
+        ratio = Decimal(round(ratio, 3))
+        price = myround(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
+        return price + inst.price_tick

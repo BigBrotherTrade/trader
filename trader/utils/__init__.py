@@ -24,9 +24,11 @@ import pytz
 from bs4 import BeautifulSoup
 import aiohttp
 from django.db.models import F
+import redis
 
 from panel.models import *
 from trader.utils import ApiStruct
+from trader.utils.read_config import config
 
 max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
@@ -59,6 +61,11 @@ async def is_trading_day(day: datetime.datetime = datetime.datetime.today().repl
     因为开市前也可能返回302, 所以适合收市后(下午)使用
     :return: bool
     """
+    s = redis.StrictRedis(
+        host=config.get('REDIS', 'host', fallback='localhost'),
+        db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
+    if day.strftime('%Y%m%d') == s.get('TradingDay'):
+        return day, True
     async with aiohttp.ClientSession() as session:
         await max_conn_cffex.acquire()
         async with session.get(
