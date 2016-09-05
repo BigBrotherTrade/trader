@@ -45,10 +45,9 @@ class DirectionType(DjangoChoices):
 
 
 class OffsetFlag(DjangoChoices):
-    BUY = C(label='买开')
-    SELL = C(label='卖平')
-    SELL_SHORT = C(label='卖开')
-    BUY_COVER = C(label='买平')
+    OPEN = C(label='开')
+    CLOSE = C(label='平')
+    CLOSE_TODAY = C(label='平今')
 
 
 class OrderStatus(DjangoChoices):

@@ -107,28 +107,6 @@ class Param(models.Model):
             next((v for v in [self.str_value, self.int_value, self.float_value] if v is not None), '-'))
 
 
-class Order(models.Model):
-    broker = models.ForeignKey(Broker, verbose_name='账户', on_delete=models.CASCADE)
-    strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.SET_NULL, null=True, blank=True)
-    order_ref = models.CharField('报单号', max_length=13)
-    instrument = models.CharField('品种代码', max_length=8)
-    front = models.IntegerField('前置编号')
-    session = models.IntegerField('会话编号')
-    price = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='报单价格')
-    direction = models.CharField('方向', max_length=8, choices=DirectionType.choices)
-    offset_flag = models.CharField('开平', max_length=8, choices=OffsetFlag.choices)
-    status = models.CharField('状态', max_length=16, choices=OrderStatus.choices)
-    send_time = models.DateTimeField('发送时间')
-    update_time = models.DateTimeField('更新时间')
-
-    class Meta:
-        verbose_name = '报单'
-        verbose_name_plural = '报单列表'
-
-    def __str__(self):
-        return '{}-{}'.format(self.instrument, self.get_offset_flag_display())
-
-
 class Instrument(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
     name = models.CharField('名称', max_length=32, null=True, blank=True)
@@ -216,6 +194,30 @@ class DailyBar(models.Model):
         return '{}.{}'.format(self.exchange, self.code)
 
 
+class Order(models.Model):
+    broker = models.ForeignKey(Broker, verbose_name='账户', on_delete=models.CASCADE)
+    strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.SET_NULL, null=True, blank=True)
+    order_ref = models.CharField('报单号', max_length=13)
+    instrument = models.ForeignKey(Instrument, verbose_name='品种', on_delete=models.CASCADE)
+    code = models.CharField('合约代码', max_length=8, null=True, blank=True)
+    front = models.IntegerField('前置编号')
+    session = models.IntegerField('会话编号')
+    price = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='报单价格')
+    volume = models.IntegerField('手数', blank=True, null=True)
+    direction = models.CharField('方向', max_length=8, choices=DirectionType.choices)
+    offset_flag = models.CharField('开平', max_length=8, choices=OffsetFlag.choices)
+    status = models.CharField('状态', max_length=16, choices=OrderStatus.choices)
+    send_time = models.DateTimeField('发送时间')
+    update_time = models.DateTimeField('更新时间')
+
+    class Meta:
+        verbose_name = '报单'
+        verbose_name_plural = '报单列表'
+
+    def __str__(self):
+        return '{}-{}'.format(self.instrument, self.get_offset_flag_display())
+
+
 class Trade(models.Model):
     broker = models.ForeignKey(Broker, verbose_name='账户', on_delete=models.CASCADE)
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.SET_NULL, null=True, blank=True)
@@ -230,6 +232,7 @@ class Trade(models.Model):
     close_time = models.DateTimeField('平仓日期', null=True, blank=True)
     shares = models.IntegerField('手数', blank=True)
     filled_shares = models.IntegerField('已成交手数', null=True, blank=True)
+    closed_shares = models.IntegerField('已平仓手数', null=True, blank=True)
     avg_entry_price = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='持仓均价')
     avg_exit_price = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='平仓均价', null=True, blank=True)
     profit = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='持仓盈亏', null=True)

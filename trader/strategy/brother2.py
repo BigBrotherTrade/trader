@@ -456,7 +456,67 @@ class TradeStrategy(BaseModule):
     async def OnRtnTrade(self, channel, trade: dict):
         try:
             order_ref = channel.split(':')[-1]
-            logger.info('order_ref=%s, trade: %s', order_ref, trade)
+            # logger.info('order_ref=%s, trade: %s', order_ref, trade)
+            inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', trade['InstrumentID'])[0])
+            order = Order.objects.filter(order_ref=order_ref).first()
+            if trade['OffsetFlag'] == ApiStruct.OF_Open:
+                last_trade, created = Trade.objects.update_or_create(
+                    broker=self.__broker, strategy=self.__strategy, instrument=inst,
+                    open_time__date=datetime.datetime.strptime(trade['TradingDay'], '%Y%m%d').replace(
+                        tzinfo=pytz.FixedOffset(480)).date(),
+                    direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
+                    close_time__isnull=True, defaults={
+                        'open_order': order,
+                        'open_time': datetime.datetime.strptime(
+                            trade['TradeDate']+trade['TradeTime'], '%Y%m%d%H:%M:%S').replace(
+                            tzinfo=pytz.FixedOffset(480))})
+                if created:
+                    last_trade.filled_shares = trade['Volume']
+                    last_trade.shares = order.volume if order is not None else trade['Volume']
+                    last_trade.avg_entry_price = trade['Price']
+                    last_trade.cost = \
+                        trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * \
+                        inst.volume_multiple + trade['Volume'] * inst.fee_volume
+                    last_trade.frozen_margin = trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
+                else:
+                    if last_trade is not None:
+                        if last_trade.filled_shares is None:
+                            last_trade.filled_shares = 0
+                        if last_trade.avg_entry_price is None:
+                            last_trade.avg_entry_price = Decimal(0)
+                    last_trade.avg_entry_price = \
+                        (last_trade.avg_entry_price * last_trade.filled_shares + trade['Volume'] *
+                         trade['Price']) / (last_trade.filled_shares + trade['Volume'])
+                    last_trade.filled_shares += trade['Volume']
+                    last_trade.cost += \
+                        trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * \
+                        inst.volume_multiple + trade['Volume'] * inst.fee_volume
+                    last_trade.frozen_margin += trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
+                last_trade.save()
+            else:
+                last_trade = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy, instrument=inst,
+                    direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Sell else DirectionType.SHORT,
+                    close_time__isnull=True).first()
+                if last_trade is not None:
+                    if last_trade.closed_shares is None:
+                        last_trade.closed_shares = 0
+                    if last_trade.avg_exit_price is None:
+                        last_trade.avg_exit_price = Decimal(0)
+                    last_trade.avg_exit_price = \
+                        (last_trade.avg_exit_price * last_trade.closed_shares +
+                         trade['Volume'] * trade['Price']) / (last_trade.closed_shares + trade['Volume'])
+                    last_trade.closed_shares += trade['Volume']
+                    last_trade.cost += \
+                        trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * \
+                        inst.volume_multiple + trade['Volume'] * inst.fee_volume
+                    if last_trade.closed_shares == last_trade.shares:
+                        # 全部成交
+                        last_trade.close_order = order
+                        last_trade.close_time = datetime.datetime.strptime(
+                            trade['TradeDate']+trade['TradeTime'], '%Y%m%d%H:%M:%S').replace(
+                            tzinfo=pytz.FixedOffset(480))
+                    last_trade.save()
         except Exception as ee:
             logger.error('OnRtnTrade failed: %s', repr(ee), exc_info=True)
 
@@ -464,7 +524,20 @@ class TradeStrategy(BaseModule):
     async def OnRtnOrder(self, channel, order: dict):
         try:
             order_ref = channel.split(':')[-1]
-            logger.info('order_ref=%s, order: %s', order_ref, order)
+            # logger.info('order_ref=%s, order: %s', order_ref, order)
+            inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', order['InstrumentID'])[0])
+            Order.objects.update_or_create(order_ref=order_ref, defaults={
+                'broker': self.__broker, 'strategy': self.__strategy, 'instrument': inst,
+                'code': order['InstrumentID'], 'front': order['FrontID'], 'session': order['SessionID'],
+                'price': order['LimitPrice'], 'volume': order['VolumeTotalOriginal'],
+                'direction': DirectionType.LONG if order['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
+                'offset_flag': OffsetFlag.OPEN if order['CombOffsetFlag'] == ApiStruct.OF_Open else OffsetFlag.CLOSE,
+                'status': order['OrderStatus'],
+                'send_time': datetime.datetime.strptime(
+                    order['InsertDate']+order['InsertTime'], '%Y%m%d%H:%M:%S').replace(
+                    tzinfo=pytz.FixedOffset(480)),
+                'update_time': datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+            })
         except Exception as ee:
             logger.error('OnRtnOrder failed: %s', repr(ee), exc_info=True)
 
@@ -605,6 +678,7 @@ class TradeStrategy(BaseModule):
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
         today, trading = await is_trading_day()
+        logger.info('更新资金净值 %s %s', today, trading)
         if trading:
             dividend = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).aggregate(Sum('dividend'))['dividend__sum']
