@@ -802,20 +802,22 @@ class TradeStrategy(BaseModule):
                         price = self.calc_down_limit(inst, new_bar)
             # 做多
             elif buy_sig:
-                signal = SignalType.BUY
                 volume = self.__current * risk // (Decimal(atr) * Decimal(inst.volume_multiple))
-                signal_value = high_line
-                new_bar = DailyBar.objects.filter(
-                    exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = self.calc_up_limit(inst, new_bar)
+                if volume > 0:
+                    signal = SignalType.BUY
+                    signal_value = high_line
+                    new_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                    price = self.calc_up_limit(inst, new_bar)
             # 做空
             elif sell_sig:
-                signal = SignalType.SELL_SHORT
                 volume = self.__current * risk // (Decimal(atr) * Decimal(inst.volume_multiple))
-                signal_value = low_line
-                new_bar = DailyBar.objects.filter(
-                    exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = self.calc_down_limit(inst, new_bar)
+                if volume > 0:
+                    signal = SignalType.SELL_SHORT
+                    signal_value = low_line
+                    new_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                    price = self.calc_down_limit(inst, new_bar)
             if signal is not None:
                 Signal.objects.update_or_create(
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
