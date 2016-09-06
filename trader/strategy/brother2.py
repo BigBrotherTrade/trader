@@ -151,12 +151,12 @@ class TradeStrategy(BaseModule):
 
     async def start(self):
         await self.query('TradingAccount')
-        await self.query('InvestorPositionDetail')
+        # await self.query('InvestorPositionDetail')
         # await self.collect_tick_stop()
         # await self.collect_quote()
-        # day = datetime.datetime.strptime('20160905', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
-        # for inst in self.__strategy.instruments.all():
-        #     self.calc_signal(inst, day)
+        day = datetime.datetime.strptime('20160905', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+        for inst in self.__strategy.instruments.all():
+            self.calc_signal(inst, day)
             # self.process_signal(inst)
         # order_list = await self.query('Order')
         # if order_list:
@@ -570,7 +570,7 @@ class TradeStrategy(BaseModule):
             inst = self.__strategy.instruments.filter(product_code=product_code).first()
             if inst is None or product_code not in self.__inst_ids:
                 return
-            if is_auction_time(inst, status):
+            if True:
                 self.process_signal(inst)
         except Exception as ee:
             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
@@ -742,6 +742,12 @@ class TradeStrategy(BaseModule):
             low_line = np.amin(arr[-break_n:-1, 3])
             buy_sig = short_trend > long_trend and close > high_line
             sell_sig = short_trend < long_trend and close < low_line
+            if self.__strategy.force_opens.filter(id=inst.id).exists() and not buy_sig and not sell_sig:
+                logger.info('强制开仓: %s', inst)
+                if short_trend > long_trend:
+                    buy_sig = True
+                else:
+                    sell_sig = True
             # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
             pos = Trade.objects.filter(
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
