@@ -657,7 +657,8 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='0 10 * * *')
     async def collect_tick_start(self):
-        day, trading = await is_trading_day()
+        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
+        day, trading = await is_trading_day(day)
         logger.info('订阅全品种行情, %s %s', day, trading)
         if trading:
             inst_set = list()
@@ -667,7 +668,8 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='0 11 * * *')
     async def collect_tick_stop(self):
-        day, trading = await is_trading_day()
+        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
+        day, trading = await is_trading_day(day)
         logger.info('取消订阅全品种行情, %s %s', day, trading)
         if trading:
             inst_set = list()
@@ -677,7 +679,7 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
-        today, trading = await is_trading_day()
+        today, trading = await is_trading_day(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
         logger.info('更新资金净值 %s %s', today, trading)
         if trading:
             dividend = Performance.objects.filter(

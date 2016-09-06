@@ -55,7 +55,7 @@ def myround(x: Decimal, base: Decimal):
     return round(base * round(x / base), prec)
 
 
-async def is_trading_day(day: datetime.datetime = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))):
+async def is_trading_day(day: datetime.datetime):
     """
     判断是否是交易日, 方法是从中金所获取今日的K线数据,判断http的返回码(如果出错会返回302重定向至404页面),
     因为开市前也可能返回302, 所以适合收市后(下午)使用
