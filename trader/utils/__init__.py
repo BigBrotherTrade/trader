@@ -25,6 +25,7 @@ from bs4 import BeautifulSoup
 import aiohttp
 from django.db.models import F
 import redis
+import quandl
 
 from panel.models import *
 from trader.utils import ApiStruct
@@ -34,6 +35,7 @@ max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
 max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
+quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
 
 
 def str_to_number(s):

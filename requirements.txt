@@ -14,3 +14,4 @@ numpy
 pandas
 TA-Lib
 croniter
+quandl

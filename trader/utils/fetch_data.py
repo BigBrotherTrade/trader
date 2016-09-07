@@ -1,28 +1,20 @@
 import sys
 import os
+import datetime
+import asyncio
+import pytz
+
+from tqdm import tqdm
 import django
+
 if sys.platform == 'darwin':
     sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
 else:
     sys.path.append('/home/cyh/bigbrother/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 django.setup()
-import datetime
-
-import asyncio
-import django
-import pytz
-from tqdm import tqdm
-
 from trader.utils import is_trading_day, update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, \
     create_main_all
-
-if sys.platform == 'darwin':
-    sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
-else:
-    sys.path.append('/home/cyh/bigbrother/dashboard')
-os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
-django.setup()
 
 async def fetch_bar():
     day = datetime.datetime.strptime('20160108', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
