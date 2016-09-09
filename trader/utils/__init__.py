@@ -384,3 +384,45 @@ def is_auction_time(inst: Instrument, status: dict):
         if not inst.night_trade and now.hour == 8:
             return True
     return False
+
+
+def fetch_from_quandl(inst: Instrument):
+    market = inst.exchange
+    if inst.exchange == ExchangeType.CZCE:
+        market = 'ZCE'
+    prefix = '{}/{}'.format(market, inst.product_code.upper())
+    for year in range(2010, 2017+1):
+        print('year', year)
+        for month, month_code in MONTH_CODE.items():
+            quandl_code = prefix + month_code + str(year)
+            print('month', month)
+            rst = None
+            try:
+                rst = quandl.get(quandl_code)
+            except quandl.QuandlError:
+                pass
+            if rst is None:
+                continue
+            rst.rename(columns={'O.I.': 'OI', 'Open Interest': 'OI'}, inplace=True)
+            rst.Open.fillna(rst.Close, inplace=True)
+            rst.High.fillna(rst.Close, inplace=True)
+            rst.Low.fillna(rst.Close, inplace=True)
+            rst.OI.fillna(0, inplace=True)
+            rst.Volume.fillna(0, inplace=True)
+            if inst.exchange == ExchangeType.CZCE:
+                code = '{}{}{:02}'.format(inst.product_code, year % 10, month)
+            else:
+                code = '{}{}{:02}'.format(inst.product_code, year % 100, month)
+            for row in rst.itertuples():
+                # print(quandl_code, row)
+                DailyBar.objects.update_or_create(
+                    exchange=inst.exchange, code=code, time=row.Index.date(), defaults={
+                        'expire_date': int('{}{:02}'.format(year % 100, month)),
+                        'open': row.Open, 'high': row.High, 'low': row.Low, 'close': row.Close,
+                        'settlement': row.Settle, 'volume': row.Volume, 'open_interest': row.OI})
+
+
+def fetch_from_quandl_all():
+    for inst in Instrument.objects.all():
+        print('process', inst)
+        fetch_from_quandl(inst)

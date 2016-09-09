@@ -14,7 +14,8 @@ else:
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 django.setup()
 from trader.utils import is_trading_day, update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, \
-    create_main_all
+    create_main_all, fetch_from_quandl_all
+
 
 async def fetch_bar():
     day = datetime.datetime.strptime('20160108', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
@@ -40,5 +41,7 @@ async def fetch_bar():
     for f in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
         await f
 
+
 # asyncio.get_event_loop().run_until_complete(fetch_bar())
-create_main_all()
+# create_main_all()
+fetch_from_quandl_all()
