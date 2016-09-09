@@ -735,7 +735,8 @@ class TradeStrategy(BaseModule):
             ).order_by('time').values_list('open', 'high', 'low', 'close')
             arr = np.array(last_bars, dtype=float)
             close = arr[-1, 3]
-            atr = talib.ATR(arr[:, 1], arr[:, 2], arr[:, 3], timeperiod=atr_n)[-1]
+            atr_s = talib.ATR(arr[:, 1], arr[:, 2], arr[:, 3], timeperiod=atr_n)
+            atr = atr_s[-1]
             short_trend = talib.SMA(arr[:, 3], timeperiod=short_n)[-1]
             long_trend = talib.SMA(arr[:, 3], timeperiod=long_n)[-1]
             high_line = np.amax(arr[-break_n:-1, 3])
@@ -747,8 +748,12 @@ class TradeStrategy(BaseModule):
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
                 instrument=inst, shares__gt=0, open_time__lt=day).first()
             roll_over = False
+            open_count = 1
             if pos is not None:
                 roll_over = pos.code != inst.main_code
+                open_count = MainBar.objects.filter(
+                    exchange=inst.exchange, product_code=inst.product_code,
+                    time__gte=pos.open_time.date(), time__lte=day.date()).count()
             elif self.__strategy.force_opens.filter(id=inst.id).exists() and not buy_sig and not sell_sig:
                     logger.info('强制开仓: %s', inst)
                     if short_trend > long_trend:
@@ -765,12 +770,12 @@ class TradeStrategy(BaseModule):
                 if pos.direction == DirectionType.LONG:
                     hh = float(MainBar.objects.filter(
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
-                        time__gte=pos.open_time, time__lte=day).aggregate(Max('high'))['high__max'])
+                        time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
                     # 多头止损
-                    if close <= hh - atr * stop_n:
+                    if close <= hh - atr_s[-open_count] * stop_n:
                         signal = SignalType.SELL
                         # 止损时 signal_value 为止损价
-                        signal_value = hh - atr * stop_n
+                        signal_value = hh - atr_s[-open_count] * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
@@ -790,11 +795,11 @@ class TradeStrategy(BaseModule):
                 else:
                     ll = float(MainBar.objects.filter(
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
-                        time__gte=pos.open_time, time__lte=day).aggregate(Min('low'))['low__min'])
+                        time__gte=pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
                     # 空头止损
-                    if close >= ll + atr * stop_n:
+                    if close >= ll + atr_s[-open_count] * stop_n:
                         signal = SignalType.BUY_COVER
-                        signal_value = ll + atr * stop_n
+                        signal_value = ll + atr_s[-open_count] * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
