@@ -67,17 +67,17 @@ class TradeStrategy(BaseModule):
     __broker = None
     __strategy = None
 
-    def update_order(self, order):
+    def update_order(self, order: dict):
         if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
                         order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
-            if self.__activeOrders.get(order.OrderRef) is None:
+            if self.__activeOrders.get(order['OrderRef']) is None:
                 #     logger.info(u"OpenOrder=%s", order)
                 #     build_order = self.build_order_from_open_order(order, self.getInstrumentTraits())
                 #     self._register_order(build_order)
                 #     self.update_order(order)
                 pass
 
-    def update_account(self, account):
+    def update_account(self, account: dict):
         # 静态权益=上日结算-出金金额+入金金额
         self.__pre_balance = Decimal(account['PreBalance']) - Decimal(account['Withdraw']) + \
                              Decimal(account['Deposit'])
@@ -121,18 +121,20 @@ class TradeStrategy(BaseModule):
     def update_position(self):
         for _, pos in self.__shares.items():
             inst = Instrument.objects.filter(
-                exchange=pos['ExchangeID'], product_code=re.findall('[A-Za-z]+', pos['InstrumentID'])[0]).first()
+                exchange=pos['ExchangeID'],
+                product_code=re.findall('[A-Za-z]+', pos['InstrumentID'])[0]).first()
             Trade.objects.update_or_create(
                 broker=self.__broker, strategy=self.__strategy, instrument=inst,
                 code=pos['InstrumentID'],
                 direction=DirectionType.LONG if pos['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
-                open_time=datetime.datetime.strptime(
-                    pos['OpenDate']+'09', '%Y%m%d%H').replace(tzinfo=pytz.FixedOffset(480)),
+                close_time__isnull=True,
                 defaults={
+                    'open_time': datetime.datetime.strptime(
+                        pos['OpenDate']+'09', '%Y%m%d%H').replace(tzinfo=pytz.FixedOffset(480)),
                     'shares': pos['Volume'], 'filled_shares': pos['Volume'],
                     'avg_entry_price': Decimal(pos['OpenPrice']),
-                    'cost': pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money * inst.volume_multiple
-                        + pos['Volume'] * inst.fee_volume,
+                    'cost': pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money *
+                            inst.volume_multiple + pos['Volume'] * inst.fee_volume,
                     'profit': Decimal(pos['PositionProfitByTrade']), 'frozen_margin': Decimal(pos['Margin'])})
 
     @staticmethod
@@ -182,7 +184,7 @@ class TradeStrategy(BaseModule):
         self.__request_id = 1 if self.__request_id == 65535 else self.__request_id + 1
         return self.__request_id
 
-    def getShares(self, instrument):
+    def getShares(self, instrument: str):
         # 这个函数只能处理持有单一方向仓位的情况，若同时持有多空的头寸，返回结果不正确
         shares = 0
         pos_price = 0
@@ -191,16 +193,16 @@ class TradeStrategy(BaseModule):
             shares += pos['Volume'] * (-1 if pos['Direction'] == ApiStruct.D_Sell else 1)
         return shares, pos_price / abs(shares), self.__shares[instrument][0]['OpenDate']
 
-    def getPositions(self, inst_id):
+    def getPositions(self, inst_id: int):
         # 这个函数只能处理持有单一方向仓位的情况，若同时持有多空的头寸，返回结果不正确
         return self.__shares[inst_id][0]
 
-    def async_query(self, query_type, **kwargs):
+    def async_query(self, query_type: str, **kwargs):
         request_id = self.next_id()
         kwargs['RequestID'] = request_id
         self.redis_client.publish(self.__request_format.format('ReqQry' + query_type), json.dumps(kwargs))
 
-    async def query(self, query_type, **kwargs):
+    async def query(self, query_type: str, **kwargs):
         sub_client = None
         channel_name1, channel_name2 = None, None
         try:
@@ -839,112 +841,6 @@ class TradeStrategy(BaseModule):
                         'priority': PriorityType.Normal, 'processed': False})
         except Exception as e:
             logger.error('calc_signal failed: %s', e, exc_info=True)
-
-    # def build_order_from_open_order(self, order, instrument_traits):
-    #     ret = None
-    #     if order.ContingentCondition != ApiStruct.CC_Immediately:
-    #         # 创建服务器条件单
-    #         if order.LimitPrice < 1:
-    #             ret = broker.StopOrder(self.get_order_action(order), order.InstrumentID, order.StopPrice,
-    #                                    order.VolumeTotalOriginal, instrument_traits)
-    #         else:
-    #             ret = broker.StopLimitOrder(self.get_order_action(order), order.InstrumentID, order.StopPrice,
-    #                                         order.LimitPrice, order.VolumeTotalOriginal, instrument_traits)
-    #     else:
-    #         ret = broker.LimitOrder(self.get_order_action(order), order.InstrumentID, order.LimitPrice,
-    #                                 order.VolumeTotalOriginal, instrument_traits)
-    #     ret.setId(order.OrderRef)
-    #     ret.set_ctp_order(copy.copy(order))
-    #     if order.OrderStatus == ApiStruct.OST_NoTradeQueueing:
-    #         ret.setState(broker.Order.State.INITIAL)
-    #     elif order.OrderStatus == ApiStruct.OST_AllTraded:
-    #         ret.setState(broker.Order.State.FILLED)
-    #     else:
-    #         ret.setSubmitted(order.OrderRef, datetime.datetime.now())
-    #         ret.setState(broker.Order.State.ACCEPTED)
-    #     return ret
-    #
-    # def build_order_from_trade(self, trade):
-    #     ret = broker.LimitOrder(self.get_order_action_from_trade(trade), trade.InstrumentID, trade.Price,
-    #                             trade.Volume, self.getInstrumentTraits())
-    #     ret.setId(trade.OrderRef)
-    #     ret.setSubmitted(trade.OrderRef, datetime.datetime.now())
-    #     ret.setState(broker.Order.State.ACCEPTED)
-    #     return ret
-    #
-    # def _on_user_trades(self, trade):
-    #     """:param trade : ctp.ApiStruct.Trade """
-    #     order = self.__activeOrders.get(trade.OrderRef)
-    #     if order is None:
-    #         order = self.build_order_from_trade(trade)
-    #     fee = self.calc_fee(inst=trade.InstrumentID, price=trade.Price, volume=trade.Volume,
-    #                         action=trade.OffsetFlag)
-    #     # Update the order.
-    #     order_execution_info = \
-    #         broker.OrderExecutionInfo(trade.Price, abs(trade.Volume), fee,
-    #                                   datetime.datetime.strptime(trade.TradeDate + trade.TradeTime, "%Y%m%d%H:%M:%S"))
-    #     order.addExecutionInfo(order_execution_info)
-    #     if not order.isActive():
-    #         self._unregister_order(order)
-    #     # Notify that the order was updated.
-    #     if order.isFilled():
-    #         event_type = broker.OrderEvent.Type.FILLED
-    #         self.notifyOrderEvent(broker.OrderEvent(order, event_type, order_execution_info))
-    #         self.refresh_account_balance()
-    #
-    # def _on_user_order(self, st_order):
-    #     act_order = self.__activeOrders.get(st_order.OrderRef)
-    #     # 根据收到的是普通单和服务器条件单，两种情况分别处理
-    #     # 服务器条件单
-    #     if st_order.ContingentCondition != ApiStruct.CC_Immediately:
-    #         if st_order.OrderStatus == ApiStruct.OST_Canceled:  # 条件单已撤销
-    #             if act_order is not None:
-    #                 self._unregister_order(act_order)
-    #                 logger.info(u"删除已撤销的服务器条件单,OrderRef=%s", st_order.OrderRef)
-    #         elif st_order.OrderStatus == ApiStruct.OST_Touched:  # 条件单已触发
-    #             if act_order is not None:
-    #                 self._unregister_order(act_order)
-    #                 logger.info(u"删除已触发的服务器条件单,OrderRef=%s", st_order.OrderRef)
-    #         elif st_order.OrderStatus == ApiStruct.OST_NotTouched:  # 交易所已接收，未触发
-    #             if act_order is None:
-    #                 act_order = self.build_order_from_open_order(st_order, self.getInstrumentTraits())
-    #                 self._register_order(act_order)
-    #                 logger.info(u"收到非本策略发出的服务器条件单,OrderRef=%s", st_order.OrderRef)
-    #             else:
-    #                 act_order.set_ctp_order(copy.copy(st_order))
-    #                 logger.info(u"服务器条件单提交成功,OrderRef=%s", st_order.OrderRef)
-    #         return
-    #     # 普通单
-    #     else:
-    #         if st_order.OrderStatus == ApiStruct.OST_AllTraded:  # 全部成交
-    #             if act_order is None:
-    #                 act_order = self.build_order_from_open_order(st_order, self.getInstrumentTraits())
-    #                 self._register_order(act_order)
-    #                 logger.info(u"收到非本策略发出的已成交单,可能是服务器条件单发起的,OrderRef=%s", st_order.OrderRef)
-    #             else:
-    #                 pass  # 在on_user_trade里面修改订单状态，这里不需要有任何操作
-    #         elif st_order.OrderStatus == ApiStruct.OST_Canceled:  # 撤单
-    #             if act_order is not None:
-    #                 self._unregister_order(act_order)
-    #                 act_order.switchState(broker.Order.State.CANCELED)
-    #                 self.notifyOrderEvent(broker.OrderEvent(act_order, broker.OrderEvent.Type.CANCELED,
-    #                                                         st_order.StatusMsg.decode('gbk')))
-    #                 logger.info(u"移除已撤销的普通单,OrderRef=%s", st_order.OrderRef)
-    #             else:
-    #                 logger.info(u"收到非本策略发出的已撤销单,OrderRef=%s", st_order.OrderRef)
-    #
-    #         else:  # 部分成交
-    #             if act_order is None:
-    #                 act_order = self.build_order_from_open_order(st_order, self.getInstrumentTraits())
-    #                 self._register_order(act_order)
-    #                 logger.info(u"收到非本策略发出的普通单,OrderRef=%s,status=%s", st_order.OrderRef, st_order.OrderStatus)
-    #             else:
-    #                 act_order.set_ctp_order(copy.copy(st_order))
-    #                 if act_order.getState() == broker.Order.State.INITIAL:
-    #                     act_order.switchState(broker.Order.State.SUBMITTED)
-    #                 logger.info(u"报单已受理,ref=%s,inst=%s,price=%s,act=%s,status=%s", act_order.getId(),
-    #                             act_order.getInstrument(), act_order.getAvgFillPrice(), act_order.getAction(),
-    #                             st_order.OrderStatus)
 
     def process_signal(self, inst: Instrument):
         signal = Signal.objects.filter(strategy=self.__strategy, instrument=inst, processed=False).first()
