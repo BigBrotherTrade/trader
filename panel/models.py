@@ -89,6 +89,11 @@ class Strategy(models.Model):
     get_instruments.short_description = '交易合约'
     get_instruments.allow_tags = True
 
+    def get_force_opens(self):
+        return [inst for inst in self.force_opens.all()]
+    get_force_opens.short_description = '手动开仓'
+    get_force_opens.allow_tags = True
+
 
 class Param(models.Model):
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.CASCADE)
@@ -154,9 +159,9 @@ class Signal(models.Model):
 
 class MainBar(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
-    product_code = models.CharField('品种代码', max_length=8, null=True)
+    product_code = models.CharField('品种代码', max_length=8, null=True, db_index=True)
     cur_code = models.CharField('当前合约', max_length=8, null=True)
-    time = models.DateField('时间')
+    time = models.DateField('时间', db_index=True)
     open = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='开盘价')
     high = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最高价')
     low = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最低价')
@@ -176,9 +181,9 @@ class MainBar(models.Model):
 
 class DailyBar(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
-    code = models.CharField('品种代码', max_length=8, null=True)
+    code = models.CharField('品种代码', max_length=8, null=True, db_index=True)
     expire_date = models.IntegerField('交割时间', null=True)
-    time = models.DateField('时间')
+    time = models.DateField('时间', db_index=True)
     open = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='开盘价')
     high = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最高价')
     low = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最低价')

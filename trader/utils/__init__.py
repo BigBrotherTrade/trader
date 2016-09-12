@@ -86,6 +86,7 @@ def calc_expire_date(inst_code: str, day: datetime.datetime):
         expire_date += year_exact * 1000
     return expire_date
 
+
 async def update_from_shfe(day: datetime.datetime):
     async with aiohttp.ClientSession() as session:
         day_str = day.strftime('%Y%m%d')
@@ -120,6 +121,7 @@ async def update_from_shfe(day: datetime.datetime):
                         'volume': inst_data['VOLUME'] if inst_data['VOLUME'] else 0,
                         'open_interest': inst_data['OPENINTEREST'] if inst_data['OPENINTEREST'] else 0})
 
+
 async def fetch_czce_page(session, url):
     await max_conn_czce.acquire()
     rst = None
@@ -135,11 +137,11 @@ async def update_from_czce(day: datetime.datetime):
         day_str = day.strftime('%Y%m%d')
         rst = await fetch_czce_page(
             session, 'http://www.czce.com.cn/portal/DFSStaticFiles/Future/{}/{}/FutureDataDaily.txt'.format(
-                    day.year, day_str))
+                day.year, day_str))
         if rst is None:
             rst = await fetch_czce_page(
                 session, 'http://www.czce.com.cn/portal/exchange/{}/datadaily/{}.txt'.format(
-                        day.year, day_str))
+                    day.year, day_str))
         for lines in rst.split('\r\n')[1:-3]:
             if '小计' in lines or '品种' in lines:
                 continue
@@ -172,8 +174,8 @@ async def update_from_dce(day: datetime.datetime):
         day_str = day.strftime('%Y%m%d')
         await max_conn_dce.acquire()
         async with session.post('http://www.dce.com.cn/PublicWeb/MainServlet', data={
-                'action': 'Pu00011_result', 'Pu00011_Input.trade_date': day_str, 'Pu00011_Input.variety': 'all',
-                'Pu00011_Input.trade_type': 0}) as response:
+            'action': 'Pu00011_result', 'Pu00011_Input.trade_date': day_str, 'Pu00011_Input.variety': 'all',
+            'Pu00011_Input.trade_type': 0}) as response:
             rst = await response.text()
             max_conn_dce.release()
             soup = BeautifulSoup(rst, 'lxml')
@@ -285,9 +287,7 @@ def handle_rollover(inst: Instrument, new_bar: DailyBar):
         low=F('low') + basis, close=F('close') + basis, settlement=F('settlement') + basis)
 
 
-def calc_main_inst(
-        inst: Instrument,
-        day: datetime.datetime = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))):
+def calc_main_inst(inst: Instrument, day: datetime.datetime):
     """
     [["2016-07-18","2116.000","2212.000","2106.000","2146.000","34"],...]
     """
@@ -301,12 +301,12 @@ def calc_main_inst(
         check_bar = DailyBar.objects.filter(
             exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
             expire_date__gte=expire_date,
-            time=day).order_by('-volume').first()
+            time=day.date()).order_by('-volume').first()
     else:
         check_bar = DailyBar.objects.filter(
             exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
             expire_date__gte=expire_date,
-            time=day, volume__gte=10000, open_interest__gte=10000).order_by('-volume').first()
+            time=day.date(), volume__gte=10000, open_interest__gte=10000).order_by('-volume').first()
     # 条件2: 不满足条件1但是连续3天成交量最大 = 主力合约
     if check_bar is None:
         check_bars = list(DailyBar.objects.raw(
@@ -324,7 +324,8 @@ def calc_main_inst(
         if check_bar is None:
             check_bar = DailyBar.objects.filter(
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                expire_date__gte=expire_date, time=day).order_by('-volume', '-open_interest', 'code').first()
+                expire_date__gte=expire_date, time=day.date()).order_by(
+                '-volume', '-open_interest', 'code').first()
         inst.main_code = check_bar.code
         inst.change_time = day
         inst.save(update_fields=['main_code', 'change_time'])
@@ -344,7 +345,8 @@ def calc_main_inst(
         if bar is None or bar.volume == 0 or bar.open_interest == Decimal(0):
             check_bar = DailyBar.objects.filter(
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                expire_date__gte=expire_date, time=day).order_by('-volume', '-open_interest').first()
+                expire_date__gte=expire_date, time=day.date()).order_by(
+                '-volume', '-open_interest').first()
             print('check_bar=', check_bar)
             if bar is None or bar.code != check_bar.code:
                 inst.last_main = inst.main_code
@@ -363,7 +365,9 @@ def calc_main_inst(
 
 def create_main(inst: Instrument):
     print('processing ', inst.product_code)
-    for day in DailyBar.objects.all().order_by('time').values_list('time', flat=True).distinct():
+    for day in DailyBar.objects.filter(
+            exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
+            'time').values_list('time', flat=True).distinct():
         print(day, calc_main_inst(inst, datetime.datetime.combine(
             day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
 
@@ -391,7 +395,7 @@ def fetch_from_quandl(inst: Instrument):
     if inst.exchange == ExchangeType.CZCE:
         market = 'ZCE'
     prefix = '{}/{}'.format(market, inst.product_code.upper())
-    for year in range(2010, 2017+1):
+    for year in range(2010, 2017 + 1):
         print('year', year)
         for month, month_code in MONTH_CODE.items():
             quandl_code = prefix + month_code + str(year)
@@ -403,23 +407,27 @@ def fetch_from_quandl(inst: Instrument):
                 pass
             if rst is None:
                 continue
-            rst.rename(columns={'O.I.': 'OI', 'Open Interest': 'OI'}, inplace=True)
+            rst.rename(columns={'O.I.': 'OI', 'Open Interest': 'OI', 'Prev. Day Open Interest': 'OI',
+                                'Pre Settle': 'PreSettle'},
+                       inplace=True)
+            rst.Settle.fillna(rst.PreSettle, inplace=True)
+            rst.Close.fillna(rst.Settle, inplace=True)
             rst.Open.fillna(rst.Close, inplace=True)
             rst.High.fillna(rst.Close, inplace=True)
             rst.Low.fillna(rst.Close, inplace=True)
-            rst.OI.fillna(0, inplace=True)
+            rst.OI.fillna(Decimal(0), inplace=True)
             rst.Volume.fillna(0, inplace=True)
             if inst.exchange == ExchangeType.CZCE:
                 code = '{}{}{:02}'.format(inst.product_code, year % 10, month)
             else:
                 code = '{}{}{:02}'.format(inst.product_code, year % 100, month)
-            for row in rst.itertuples():
-                # print(quandl_code, row)
-                DailyBar.objects.update_or_create(
-                    exchange=inst.exchange, code=code, time=row.Index.date(), defaults={
-                        'expire_date': int('{}{:02}'.format(year % 100, month)),
-                        'open': row.Open, 'high': row.High, 'low': row.Low, 'close': row.Close,
-                        'settlement': row.Settle, 'volume': row.Volume, 'open_interest': row.OI})
+            DailyBar.objects.bulk_create(
+                DailyBar(
+                    exchange=inst.exchange, code=code, time=row.Index.date(),
+                    expire_date=int('{}{:02}'.format(year % 100, month)),
+                    open=row.Open, high=row.High, low=row.Low, close=row.Close,
+                    settlement=row.Settle, volume=row.Volume, open_interest=row.OI)
+                for row in rst.itertuples())
 
 
 def fetch_from_quandl_all():
