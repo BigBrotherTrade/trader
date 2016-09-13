@@ -23,9 +23,11 @@ import asyncio
 import pytz
 from bs4 import BeautifulSoup
 import aiohttp
-from django.db.models import F
+from django.db.models import F, Q, Max, Min
 import redis
 import quandl
+import numpy as np
+import talib
 
 from panel.models import *
 from trader.utils import ApiStruct
@@ -36,6 +38,14 @@ max_conn_dce = asyncio.Semaphore(5)
 max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
+
+his_break_n = None
+his_atr_n = None
+his_long_n = None
+his_short_n = None
+his_stop_n = None
+his_risk = None
+his_current = None
 
 
 def str_to_number(s):
@@ -365,15 +375,23 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
 
 def create_main(inst: Instrument):
     print('processing ', inst.product_code)
-    for day in DailyBar.objects.filter(
-            exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
-            'time').values_list('time', flat=True).distinct():
-        print(day, calc_main_inst(inst, datetime.datetime.combine(
-            day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
+    if inst.change_time is None:
+        for day in DailyBar.objects.filter(
+                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
+                'time').values_list('time', flat=True).distinct():
+            print(day, calc_main_inst(inst, datetime.datetime.combine(
+                day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
+    else:
+        for day in DailyBar.objects.filter(
+                time__gt=inst.change_time.date(),
+                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
+                'time').values_list('time', flat=True).distinct():
+            print(day, calc_main_inst(inst, datetime.datetime.combine(
+                day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
 
 
 def create_main_all():
-    for inst in Instrument.objects.all():
+    for inst in Instrument.objects.filter(id__gte=12):
         create_main(inst)
     print('all done!')
 
@@ -434,3 +452,140 @@ def fetch_from_quandl_all():
     for inst in Instrument.objects.all():
         print('process', inst)
         fetch_from_quandl(inst)
+
+
+def fetch_strategy_param(strategy: Strategy):
+    global his_break_n
+    global his_atr_n
+    global his_long_n
+    global his_short_n
+    global his_stop_n
+    global his_risk
+    global his_current
+    his_break_n = strategy.param_set.get(code='BreakPeriod').int_value + 1
+    his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
+    his_long_n = strategy.param_set.get(code='LongPeriod').int_value
+    his_short_n = strategy.param_set.get(code='ShortPeriod').int_value
+    his_stop_n = strategy.param_set.get(code='StopLoss').int_value
+    his_risk = strategy.param_set.get(code='Risk').float_value
+    his_current = 10000000
+
+
+def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
+    try:
+        last_bars = MainBar.objects.filter(
+            exchange=inst.exchange, product_code=inst.product_code, time__lte=day.date()
+        ).order_by('time').values_list('open', 'high', 'low', 'close')
+        arr = np.array(last_bars, dtype=float)
+        close = arr[-1, 3]
+        atr_s = talib.ATR(arr[:, 1], arr[:, 2], arr[:, 3], timeperiod=his_atr_n)
+        atr = atr_s[-1]
+        short_trend = talib.SMA(arr[:, 3], timeperiod=his_short_n)[-1]
+        long_trend = talib.SMA(arr[:, 3], timeperiod=his_long_n)[-1]
+        high_line = np.amax(arr[-his_break_n:-1, 3])
+        low_line = np.amin(arr[-his_break_n:-1, 3])
+        buy_sig = short_trend > long_trend and close > high_line
+        sell_sig = short_trend < long_trend and close < low_line
+        # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
+        pos = Trade.objects.filter(
+            Q(close_time__isnull=True) | Q(close_time__gt=day),
+            instrument=inst, shares__gt=0, open_time__lt=day).first()
+        roll_over = False
+        open_count = 1
+        if pos is not None:
+            roll_over = pos.code != inst.main_code
+            open_count = MainBar.objects.filter(
+                exchange=inst.exchange, product_code=inst.product_code,
+                time__gte=pos.open_time.date(), time__lte=day.date()).count()
+        signal = None
+        signal_value = None
+        price = None
+        volume = None
+        if pos is not None:
+            # 多头持仓
+            if pos.direction == DirectionType.LONG:
+                hh = float(MainBar.objects.filter(
+                    exchange=inst.exchange, product_code=pos.instrument.product_code,
+                    time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
+                # 多头止损
+                if close <= hh - atr_s[-open_count] * his_stop_n:
+                    signal = SignalType.SELL
+                    # 止损时 signal_value 为止损价
+                    signal_value = hh - atr_s[-open_count] * his_stop_n
+                    volume = pos.shares
+                    last_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
+                    price = calc_his_down_limit(inst, last_bar)
+                # 多头换月
+                elif roll_over:
+                    signal = SignalType.ROLLOVER
+                    volume = pos.shares
+                    last_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
+                    # 换月时 signal_value 为旧合约的平仓价
+                    signal_value = calc_his_down_limit(inst, last_bar)
+                    new_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                    price = calc_his_up_limit(inst, new_bar)
+            # 空头持仓
+            else:
+                ll = float(MainBar.objects.filter(
+                    exchange=inst.exchange, product_code=pos.instrument.product_code,
+                    time__gte=pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
+                # 空头止损
+                if close >= ll + atr_s[-open_count] * his_stop_n:
+                    signal = SignalType.BUY_COVER
+                    signal_value = ll + atr_s[-open_count] * his_stop_n
+                    volume = pos.shares
+                    last_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
+                    price = calc_his_up_limit(inst, last_bar)
+                # 空头换月
+                elif roll_over:
+                    signal = SignalType.ROLLOVER
+                    volume = pos.shares
+                    last_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
+                    signal_value = calc_his_up_limit(inst, last_bar)
+                    new_bar = DailyBar.objects.filter(
+                        exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                    price = calc_his_down_limit(inst, new_bar)
+        # 做多
+        elif buy_sig:
+            volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
+            if volume > 0:
+                signal = SignalType.BUY
+                signal_value = high_line
+                new_bar = DailyBar.objects.filter(
+                    exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                price = calc_his_up_limit(inst, new_bar)
+        # 做空
+        elif sell_sig:
+            volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
+            if volume > 0:
+                signal = SignalType.SELL_SHORT
+                signal_value = low_line
+                new_bar = DailyBar.objects.filter(
+                    exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+                price = calc_his_down_limit(inst, new_bar)
+        if signal is not None:
+            Signal.objects.update_or_create(
+                strategy=strategy, instrument=inst, type=signal, trigger_time=day, defaults={
+                    'price': price, 'volume': volume, 'trigger_value': signal_value,
+                    'priority': PriorityType.Normal, 'processed': False})
+    except Exception as e:
+        print('calc_signal failed:', e)
+
+
+def calc_his_up_limit(inst: Instrument, bar: DailyBar):
+    ratio = inst.up_limit_ratio
+    ratio = Decimal(round(ratio, 3))
+    price = myround(bar.settlement * (Decimal(1) + ratio), inst.price_tick)
+    return price - inst.price_tick
+
+
+def calc_his_down_limit(inst: Instrument, bar: DailyBar):
+    ratio = inst.down_limit_ratio
+    ratio = Decimal(round(ratio, 3))
+    price = myround(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
+    return price + inst.price_tick
