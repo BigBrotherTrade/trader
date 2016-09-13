@@ -681,6 +681,18 @@ class TradeStrategy(BaseModule):
                 inst_set += inst.all_inst.split(',')
             await self.UnSubscribeMarketData(inst_set)
 
+    @param_function(crontab='50 8 * * *')
+    async def backend_login_day(self):
+        self.redis_client.publish(
+            self.__request_format.format('ReqSettlementInfoConfirm'),
+            json.dumps({'RequestID': self.next_id()}))
+
+    @param_function(crontab='50 20 * * *')
+    async def backend_login_night(self):
+        self.redis_client.publish(
+            self.__request_format.format('ReqSettlementInfoConfirm'),
+            json.dumps({'RequestID': self.next_id()}))
+
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
         today, trading = await is_trading_day(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
