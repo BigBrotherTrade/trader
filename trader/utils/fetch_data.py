@@ -14,11 +14,11 @@ else:
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 django.setup()
 from trader.utils import is_trading_day, update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, \
-    create_main_all, fetch_from_quandl_all
+    create_main_all, fetch_from_quandl_all, clean_daily_bar
 
 
 async def fetch_bar():
-    day = datetime.datetime.strptime('20100101', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+    day = datetime.datetime.strptime('20100416', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
     end = datetime.datetime.strptime('20160118', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
     tasks = []
     while day <= end:
@@ -41,6 +41,7 @@ async def fetch_bar():
     for f in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
         await f
 
+
 async def fetch_bar2():
     day = datetime.datetime.strptime('20100101', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
     end = datetime.datetime.strptime('20160118', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
@@ -61,3 +62,4 @@ async def fetch_bar2():
 # asyncio.get_event_loop().run_until_complete(fetch_bar2())
 create_main_all()
 # fetch_from_quandl_all()
+# clean_dailybar()

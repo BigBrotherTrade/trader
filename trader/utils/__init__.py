@@ -28,6 +28,7 @@ import redis
 import quandl
 import numpy as np
 import talib
+from tqdm import tqdm
 
 from panel.models import *
 from trader.utils import ApiStruct
@@ -358,6 +359,10 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
                 expire_date__gte=expire_date, time=day.date()).order_by(
                 '-volume', '-open_interest').first()
             print('check_bar=', check_bar)
+            if check_bar is None:
+                _, trading = asyncio.get_event_loop().run_until_complete(is_trading_day(day))
+                if not trading:
+                    return inst.main_code, updated
             if bar is None or bar.code != check_bar.code:
                 inst.last_main = inst.main_code
                 inst.main_code = check_bar.code
@@ -391,7 +396,7 @@ def create_main(inst: Instrument):
 
 
 def create_main_all():
-    for inst in Instrument.objects.filter(id__gte=12):
+    for inst in Instrument.objects.filter(id__gte=16):
         create_main(inst)
     print('all done!')
 
@@ -399,6 +404,8 @@ def create_main_all():
 def is_auction_time(inst: Instrument, status: dict):
     if status['InstrumentStatus'] == ApiStruct.IS_AuctionOrdering:
         now = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+        if inst.exchange == ExchangeType.CFFEX:
+            return True
         # 夜盘集合竞价时间是 20:55
         if inst.night_trade and now.hour == 20:
             return True
@@ -589,3 +596,20 @@ def calc_his_down_limit(inst: Instrument, bar: DailyBar):
     ratio = Decimal(round(ratio, 3))
     price = myround(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
     return price + inst.price_tick
+
+async def clean_daily_bar():
+    day = datetime.datetime.strptime('20100416', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+    end = datetime.datetime.strptime('20160118', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+    tasks = []
+    while day <= end:
+        tasks.append(is_trading_day(day))
+        day += datetime.timedelta(days=1)
+    trading_days = []
+    for f in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+        rst = await f
+        trading_days.append(rst)
+    tasks.clear()
+    for day, trading in trading_days:
+        if not trading:
+            DailyBar.objects.filter(time=day.date()).delete()
+    print('done!')

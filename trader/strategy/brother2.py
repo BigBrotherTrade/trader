@@ -579,6 +579,30 @@ class TradeStrategy(BaseModule):
         except Exception as ee:
             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
 
+    @param_function(crontab='56 8 * * *')
+    async def check_signal_processed1(self):
+        for sig in Signal.objects.filter(
+                not Q(instrument__exchange=ExchangeType.CFFEX),
+                strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+            logger.info('处理遗漏的日盘信号: %s', sig)
+            self.process_signal(sig.instrument)
+
+    @param_function(crontab='11 9 * * *')
+    async def check_signal_processed2(self):
+        for sig in Signal.objects.filter(
+                instrument__exchange=ExchangeType.CFFEX,
+                strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+            logger.info('处理遗漏的国债信号: %s', sig)
+            self.process_signal(sig.instrument)
+
+    @param_function(crontab='56 20 * * *')
+    async def check_signal_processed3(self):
+        for sig in Signal.objects.filter(
+                not Q(instrument__exchange=ExchangeType.CFFEX),
+                strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
+            logger.info('处理遗漏的夜盘信号: %s', sig)
+            self.process_signal(sig.instrument)
+
     @param_function(crontab='20 15 * * *')
     async def refresh_instrument(self):
         logger.info('更新账户')
