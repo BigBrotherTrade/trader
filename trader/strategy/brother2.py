@@ -581,27 +581,42 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='56 8 * * *')
     async def check_signal_processed1(self):
-        for sig in Signal.objects.filter(
-                not Q(instrument__exchange=ExchangeType.CFFEX),
-                strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
-            logger.info('处理遗漏的日盘信号: %s', sig)
-            self.process_signal(sig.instrument)
+        day = datetime.datetime.today()
+        day = day.replace(tzinfo=pytz.FixedOffset(480))
+        _, trading = await is_trading_day(day)
+        if trading:
+            logger.info('查询遗漏的日盘信号..')
+            for sig in Signal.objects.filter(
+                    ~Q(instrument__exchange=ExchangeType.CFFEX),
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                logger.info('发现遗漏信号: %s', sig)
+                self.process_signal(sig.instrument)
 
     @param_function(crontab='11 9 * * *')
     async def check_signal_processed2(self):
-        for sig in Signal.objects.filter(
-                instrument__exchange=ExchangeType.CFFEX,
-                strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
-            logger.info('处理遗漏的国债信号: %s', sig)
-            self.process_signal(sig.instrument)
+        day = datetime.datetime.today()
+        day = day.replace(tzinfo=pytz.FixedOffset(480))
+        _, trading = await is_trading_day(day)
+        if trading:
+            logger.info('查询遗漏的国债信号..')
+            for sig in Signal.objects.filter(
+                    instrument__exchange=ExchangeType.CFFEX,
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                logger.info('发现遗漏信号: %s', sig)
+                self.process_signal(sig.instrument)
 
     @param_function(crontab='56 20 * * *')
     async def check_signal_processed3(self):
-        for sig in Signal.objects.filter(
-                not Q(instrument__exchange=ExchangeType.CFFEX),
-                strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
-            logger.info('处理遗漏的夜盘信号: %s', sig)
-            self.process_signal(sig.instrument)
+        day = datetime.datetime.today()
+        day = day.replace(tzinfo=pytz.FixedOffset(480))
+        _, trading = await is_trading_day(day)
+        if trading:
+            logger.info('查询遗漏的夜盘信号..')
+            for sig in Signal.objects.filter(
+                    ~Q(instrument__exchange=ExchangeType.CFFEX),
+                    strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
+                logger.info('发现遗漏信号: %s', sig)
+                self.process_signal(sig.instrument)
 
     @param_function(crontab='20 15 * * *')
     async def refresh_instrument(self):
@@ -687,8 +702,8 @@ class TradeStrategy(BaseModule):
     async def collect_tick_start(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
         day, trading = await is_trading_day(day)
-        logger.info('订阅全品种行情, %s %s', day, trading)
         if trading:
+            logger.info('订阅全品种行情, %s %s', day, trading)
             inst_set = list()
             for inst in Instrument.objects.all():
                 inst_set += inst.all_inst.split(',')
@@ -698,8 +713,8 @@ class TradeStrategy(BaseModule):
     async def collect_tick_stop(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
         day, trading = await is_trading_day(day)
-        logger.info('取消订阅全品种行情, %s %s', day, trading)
         if trading:
+            logger.info('取消订阅全品种行情, %s %s', day, trading)
             inst_set = list()
             for inst in Instrument.objects.all():
                 inst_set += inst.all_inst.split(',')
@@ -720,8 +735,8 @@ class TradeStrategy(BaseModule):
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
         today, trading = await is_trading_day(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
-        logger.info('更新资金净值 %s %s', today, trading)
         if trading:
+            logger.info('更新资金净值 %s %s', today, trading)
             dividend = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).aggregate(Sum('dividend'))['dividend__sum']
             if dividend is None:
@@ -737,6 +752,7 @@ class TradeStrategy(BaseModule):
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
                 'used_margin': self.__margin,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
+
     async def update_inst_fee(self, inst: Instrument):
         """
         更新每一个合约的手续费
