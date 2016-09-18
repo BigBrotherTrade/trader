@@ -25,10 +25,14 @@ import pytz
 from bs4 import BeautifulSoup
 import aiohttp
 from django.db.models import F, Q, Max, Min
+from django.db import connection
 import redis
 import quandl
 import numpy as np
+import pandas as pd
 import talib
+from talib.abstract import ATR, SMA
+from django.db.models.sql import EmptyResultSet
 from tqdm import tqdm
 
 from panel.models import *
@@ -41,13 +45,13 @@ max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
 
-his_break_n = None
-his_atr_n = None
-his_long_n = None
-his_short_n = None
-his_stop_n = None
-his_risk = None
-his_current = None
+his_break_n = 0
+his_atr_n = 0
+his_long_n = 0
+his_short_n = 0
+his_stop_n = 0
+his_risk = 0
+his_current = 0
 
 
 def str_to_number(s):
@@ -470,7 +474,7 @@ def fetch_strategy_param(strategy: Strategy):
     global his_stop_n
     global his_risk
     global his_current
-    his_break_n = strategy.param_set.get(code='BreakPeriod').int_value + 1
+    his_break_n = strategy.param_set.get(code='BreakPeriod').int_value
     his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
     his_long_n = strategy.param_set.get(code='LongPeriod').int_value
     his_short_n = strategy.param_set.get(code='ShortPeriod').int_value
@@ -481,19 +485,25 @@ def fetch_strategy_param(strategy: Strategy):
 
 def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
     try:
-        last_bars = MainBar.objects.filter(
-            exchange=inst.exchange, product_code=inst.product_code, time__lte=day.date()
-        ).order_by('time').values_list('open', 'high', 'low', 'close')
-        arr = np.array(last_bars, dtype=float)
-        close = arr[-1, 3]
-        atr_s = talib.ATR(arr[:, 1], arr[:, 2], arr[:, 3], timeperiod=his_atr_n)
-        atr = atr_s[-1]
-        short_trend = talib.SMA(arr[:, 3], timeperiod=his_short_n)[-1]
-        long_trend = talib.SMA(arr[:, 3], timeperiod=his_long_n)[-1]
-        high_line = np.amax(arr[-his_break_n:-1, 3])
-        low_line = np.amin(arr[-his_break_n:-1, 3])
-        buy_sig = short_trend > long_trend and close > high_line
-        sell_sig = short_trend < long_trend and close < low_line
+        df = to_df(MainBar.objects.filter(
+            exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
+            'time', 'open', 'high', 'low', 'close', 'settlement'))
+        df.index = pd.DatetimeIndex(df.time)
+        df['atr'] = ATR(df, timeperiod=his_atr_n)
+        df['short_trend'] = SMA(df, timeperiod=his_short_n)
+        df['long_trend'] = SMA(df, timeperiod=his_long_n)
+        df['high_line'] = df.close.rolling(window=his_break_n).max()
+        df['low_line'] = df.close.rolling(window=his_break_n).min()
+        pos = 0
+        pos_idx = None
+        for idx in range(his_long_n - 1, df.shape[0]):
+            if pos == 0:
+                if df.short_trend[idx] > df.long_trend[idx] and df.close[idx] > df.high_line[idx-1]:
+                    pass
+                elif df.short_trend[idx] < df.long_trend[idx] and df.close[idx] < df.low_line[idx-1]:
+                    pass
+            elif pos > 0:
+
         # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
         pos = Trade.objects.filter(
             Q(close_time__isnull=True) | Q(close_time__gt=day),
@@ -645,3 +655,18 @@ def load_kt_data(directory: str = '/Users/jeffchen/kt_data/'):
             MainBar.objects.bulk_create(insert_list)
             Instrument.objects.filter(product_code=code).update(
                 last_main=last_main, main_code=cur_main, change_time=change_time)
+
+
+def to_df(queryset):
+    """
+    :param queryset: django.db.models.query.QuerySet
+    :return: pandas.core.frame.DataFrame
+    """
+    try:
+        query, params = queryset.query.sql_with_params()
+    except EmptyResultSet:
+        # Occurs when Django tries to create an expression for a
+        # query which will certainly be empty
+        # e.g. Book.objects.filter(author__in=[])
+        return pd.DataFrame()
+    return pd.io.sql.read_sql_query(query, connection, params=params)
