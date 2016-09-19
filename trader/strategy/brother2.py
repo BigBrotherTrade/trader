@@ -574,9 +574,9 @@ class TradeStrategy(BaseModule):
             inst = self.__strategy.instruments.filter(product_code=product_code).first()
             if inst is None or product_code not in self.__inst_ids:
                 return
-            logger.info('合约状态通知: %s %s', inst, status)
+            # logger.info('合约状态通知: %s %s', inst, status)
             if is_auction_time(inst, status):
-                logger.info('%s 进入集合竞价, 处理信号')
+                logger.info('%s 进入集合竞价, 处理信号', inst)
                 self.process_signal(inst)
         except Exception as ee:
             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
@@ -888,7 +888,7 @@ class TradeStrategy(BaseModule):
 
     def process_signal(self, inst: Instrument):
         signal = Signal.objects.filter(strategy=self.__strategy, instrument=inst, processed=False).first()
-        logger.info('%s 当前信号:', inst, signal)
+        logger.info('%s 当前信号: %s', inst, signal)
         if signal is None:
             return
         if signal.type == SignalType.BUY:
