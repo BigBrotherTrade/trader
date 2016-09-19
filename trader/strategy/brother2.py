@@ -419,44 +419,45 @@ class TradeStrategy(BaseModule):
                 sub_client.close()
             return None
 
-    # @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
-    # async def OnRtnDepthMarketData(self, channel, tick: dict):
-    #     """
-    #     'PreOpenInterest': 50990,
-    #     'TradingDay': '20160803',
-    #     'SettlementPrice': 1.7976931348623157e+308,
-    #     'AskVolume1': 40,
-    #     'Volume': 11060,
-    #     'LastPrice': 37740,
-    #     'LowestPrice': 37720,
-    #     'ClosePrice': 1.7976931348623157e+308,
-    #     'ActionDay': '20160803',
-    #     'UpdateMillisec': 0,
-    #     'PreClosePrice': 37840,
-    #     'LowerLimitPrice': 35490,
-    #     'OpenInterest': 49460,
-    #     'UpperLimitPrice': 40020,
-    #     'AveragePrice': 189275.7233273056,
-    #     'HighestPrice': 38230,
-    #     'BidVolume1': 10,
-    #     'UpdateTime': '11:03:12',
-    #     'InstrumentID': 'cu1608',
-    #     'PreSettlementPrice': 37760,
-    #     'OpenPrice': 37990,
-    #     'BidPrice1': 37740,
-    #     'Turnover': 2093389500,
-    #     'AskPrice1': 37750
-    #     """
-    #     try:
-    #         inst = channel.split(':')[-1]
-    #         tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
-    #         logger.info('inst=%s, tick: %s', inst, tick)
-    #     except Exception as ee:
-    #         logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
+    @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
+    async def OnRtnDepthMarketData(self, channel, tick: dict):
+        """
+        'PreOpenInterest': 50990,
+        'TradingDay': '20160803',
+        'SettlementPrice': 1.7976931348623157e+308,
+        'AskVolume1': 40,
+        'Volume': 11060,
+        'LastPrice': 37740,
+        'LowestPrice': 37720,
+        'ClosePrice': 1.7976931348623157e+308,
+        'ActionDay': '20160803',
+        'UpdateMillisec': 0,
+        'PreClosePrice': 37840,
+        'LowerLimitPrice': 35490,
+        'OpenInterest': 49460,
+        'UpperLimitPrice': 40020,
+        'AveragePrice': 189275.7233273056,
+        'HighestPrice': 38230,
+        'BidVolume1': 10,
+        'UpdateTime': '11:03:12',
+        'InstrumentID': 'cu1608',
+        'PreSettlementPrice': 37760,
+        'OpenPrice': 37990,
+        'BidPrice1': 37740,
+        'Turnover': 2093389500,
+        'AskPrice1': 37750
+        """
+        try:
+            inst = channel.split(':')[-1]
+            tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
+            logger.info('inst=%s, tick: %s', inst, tick)
+        except Exception as ee:
+            logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnTrade:*')
     async def OnRtnTrade(self, channel, trade: dict):
         try:
+            signal = None
             order_ref = channel.split(':')[-1]
             # logger.info('order_ref=%s, trade: %s', order_ref, trade)
             inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', trade['InstrumentID'])[0])
@@ -496,6 +497,10 @@ class TradeStrategy(BaseModule):
                         inst.volume_multiple + trade['Volume'] * inst.fee_volume
                     last_trade.frozen_margin += trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
                 last_trade.save()
+                signal = Signal.objects.filter(
+                    type=SignalType.BUY if trade['Direction'] == ApiStruct.D_Buy else SignalType.SELL_SHORT,
+                    volume=last_trade.filled_shares, strategy=self.__strategy, instrument=inst,
+                    processed=False).first()
             else:
                 last_trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst,
@@ -521,6 +526,14 @@ class TradeStrategy(BaseModule):
                             trade['TradeDate']+trade['TradeTime'], '%Y%m%d%H:%M:%S').replace(
                             tzinfo=pytz.FixedOffset(480))
                     last_trade.save()
+                    signal = Signal.objects.filter(
+                        type=SignalType.BUY_COVER if trade['Direction'] == ApiStruct.D_Buy
+                        else SignalType.SELL,
+                        volume=last_trade.closed_shares, strategy=self.__strategy, instrument=inst,
+                        processed=False).first()
+            if signal is not None:
+                signal.processed = True
+                signal.save(update_fields=['processed'])
         except Exception as ee:
             logger.error('OnRtnTrade failed: %s', repr(ee), exc_info=True)
 
@@ -700,8 +713,8 @@ class TradeStrategy(BaseModule):
             logger.error('collect_quote failed: %s', e, exc_info=True)
         logger.info('盘后计算完毕!')
 
-    @param_function(crontab='0 10 * * *')
-    async def collect_tick_start(self):
+    @param_function(crontab='57 8 * * *')
+    async def collect_day_tick_start(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
         day, trading = await is_trading_day(day)
         if trading:
@@ -711,8 +724,30 @@ class TradeStrategy(BaseModule):
                 inst_set += inst.all_inst.split(',')
             await self.SubscribeMarketData(inst_set)
 
-    @param_function(crontab='0 11 * * *')
-    async def collect_tick_stop(self):
+    @param_function(crontab='0 10 * * *')
+    async def collect_day_tick_stop(self):
+        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
+        day, trading = await is_trading_day(day)
+        if trading:
+            logger.info('取消订阅全品种行情, %s %s', day, trading)
+            inst_set = list()
+            for inst in Instrument.objects.all():
+                inst_set += inst.all_inst.split(',')
+            await self.UnSubscribeMarketData(inst_set)
+
+    @param_function(crontab='57 20 * * *')
+    async def collect_night_tick_start(self):
+        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
+        day, trading = await is_trading_day(day)
+        if trading:
+            logger.info('订阅全品种行情, %s %s', day, trading)
+            inst_set = list()
+            for inst in Instrument.objects.all():
+                inst_set += inst.all_inst.split(',')
+            await self.SubscribeMarketData(inst_set)
+
+    @param_function(crontab='0 22 * * *')
+    async def collect_night_tick_stop(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
         day, trading = await is_trading_day(day)
         if trading:
@@ -920,8 +955,6 @@ class TradeStrategy(BaseModule):
                 logger.info('%s->%s 空头换月%s手', pos.code, inst.main_code, signal.volume)
                 self.io_loop.create_task(self.buy_cover(pos, signal.trigger_value, signal.volume))
                 self.io_loop.create_task(self.sell_short(inst, signal.price, signal.volume))
-        signal.processed = True
-        signal.save(update_fields=['processed'])
 
     def calc_up_limit(self, inst: Instrument, bar: DailyBar):
         tick = json.loads(self.redis_client.get(bar.code))
