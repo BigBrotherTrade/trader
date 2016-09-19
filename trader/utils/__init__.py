@@ -503,94 +503,95 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 elif df.short_trend[idx] < df.long_trend[idx] and df.close[idx] < df.low_line[idx-1]:
                     pass
             elif pos > 0:
-
-        # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
-        pos = Trade.objects.filter(
-            Q(close_time__isnull=True) | Q(close_time__gt=day),
-            instrument=inst, shares__gt=0, open_time__lt=day).first()
-        roll_over = False
-        open_count = 1
-        if pos is not None:
-            roll_over = pos.code != inst.main_code
-            open_count = MainBar.objects.filter(
-                exchange=inst.exchange, product_code=inst.product_code,
-                time__gte=pos.open_time.date(), time__lte=day.date()).count()
-        signal = None
-        signal_value = None
-        price = None
-        volume = None
-        if pos is not None:
-            # 多头持仓
-            if pos.direction == DirectionType.LONG:
-                hh = float(MainBar.objects.filter(
-                    exchange=inst.exchange, product_code=pos.instrument.product_code,
-                    time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
-                # 多头止损
-                if close <= hh - atr_s[-open_count] * his_stop_n:
-                    signal = SignalType.SELL
-                    # 止损时 signal_value 为止损价
-                    signal_value = hh - atr_s[-open_count] * his_stop_n
-                    volume = pos.shares
-                    last_bar = DailyBar.objects.filter(
-                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                    price = calc_his_down_limit(inst, last_bar)
-                # 多头换月
-                elif roll_over:
-                    signal = SignalType.ROLLOVER
-                    volume = pos.shares
-                    last_bar = DailyBar.objects.filter(
-                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                    # 换月时 signal_value 为旧合约的平仓价
-                    signal_value = calc_his_down_limit(inst, last_bar)
-                    new_bar = DailyBar.objects.filter(
-                        exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                    price = calc_his_up_limit(inst, new_bar)
-            # 空头持仓
-            else:
-                ll = float(MainBar.objects.filter(
-                    exchange=inst.exchange, product_code=pos.instrument.product_code,
-                    time__gte=pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
-                # 空头止损
-                if close >= ll + atr_s[-open_count] * his_stop_n:
-                    signal = SignalType.BUY_COVER
-                    signal_value = ll + atr_s[-open_count] * his_stop_n
-                    volume = pos.shares
-                    last_bar = DailyBar.objects.filter(
-                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                    price = calc_his_up_limit(inst, last_bar)
-                # 空头换月
-                elif roll_over:
-                    signal = SignalType.ROLLOVER
-                    volume = pos.shares
-                    last_bar = DailyBar.objects.filter(
-                        exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                    signal_value = calc_his_up_limit(inst, last_bar)
-                    new_bar = DailyBar.objects.filter(
-                        exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                    price = calc_his_down_limit(inst, new_bar)
-        # 做多
-        elif buy_sig:
-            volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
-            if volume > 0:
-                signal = SignalType.BUY
-                signal_value = high_line
-                new_bar = DailyBar.objects.filter(
-                    exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = calc_his_up_limit(inst, new_bar)
-        # 做空
-        elif sell_sig:
-            volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
-            if volume > 0:
-                signal = SignalType.SELL_SHORT
-                signal_value = low_line
-                new_bar = DailyBar.objects.filter(
-                    exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                price = calc_his_down_limit(inst, new_bar)
-        if signal is not None:
-            Signal.objects.update_or_create(
-                strategy=strategy, instrument=inst, type=signal, trigger_time=day, defaults={
-                    'price': price, 'volume': volume, 'trigger_value': signal_value,
-                    'priority': PriorityType.Normal, 'processed': False})
+                pass
+        #
+        # # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
+        # pos = Trade.objects.filter(
+        #     Q(close_time__isnull=True) | Q(close_time__gt=day),
+        #     instrument=inst, shares__gt=0, open_time__lt=day).first()
+        # roll_over = False
+        # open_count = 1
+        # if pos is not None:
+        #     roll_over = pos.code != inst.main_code
+        #     open_count = MainBar.objects.filter(
+        #         exchange=inst.exchange, product_code=inst.product_code,
+        #         time__gte=pos.open_time.date(), time__lte=day.date()).count()
+        # signal = None
+        # signal_value = None
+        # price = None
+        # volume = None
+        # if pos is not None:
+        #     # 多头持仓
+        #     if pos.direction == DirectionType.LONG:
+        #         hh = float(MainBar.objects.filter(
+        #             exchange=inst.exchange, product_code=pos.instrument.product_code,
+        #             time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
+        #         # 多头止损
+        #         if close <= hh - atr_s[-open_count] * his_stop_n:
+        #             signal = SignalType.SELL
+        #             # 止损时 signal_value 为止损价
+        #             signal_value = hh - atr_s[-open_count] * his_stop_n
+        #             volume = pos.shares
+        #             last_bar = DailyBar.objects.filter(
+        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
+        #             price = calc_his_down_limit(inst, last_bar)
+        #         # 多头换月
+        #         elif roll_over:
+        #             signal = SignalType.ROLLOVER
+        #             volume = pos.shares
+        #             last_bar = DailyBar.objects.filter(
+        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
+        #             # 换月时 signal_value 为旧合约的平仓价
+        #             signal_value = calc_his_down_limit(inst, last_bar)
+        #             new_bar = DailyBar.objects.filter(
+        #                 exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+        #             price = calc_his_up_limit(inst, new_bar)
+        #     # 空头持仓
+        #     else:
+        #         ll = float(MainBar.objects.filter(
+        #             exchange=inst.exchange, product_code=pos.instrument.product_code,
+        #             time__gte=pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
+        #         # 空头止损
+        #         if close >= ll + atr_s[-open_count] * his_stop_n:
+        #             signal = SignalType.BUY_COVER
+        #             signal_value = ll + atr_s[-open_count] * his_stop_n
+        #             volume = pos.shares
+        #             last_bar = DailyBar.objects.filter(
+        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
+        #             price = calc_his_up_limit(inst, last_bar)
+        #         # 空头换月
+        #         elif roll_over:
+        #             signal = SignalType.ROLLOVER
+        #             volume = pos.shares
+        #             last_bar = DailyBar.objects.filter(
+        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
+        #             signal_value = calc_his_up_limit(inst, last_bar)
+        #             new_bar = DailyBar.objects.filter(
+        #                 exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+        #             price = calc_his_down_limit(inst, new_bar)
+        # # 做多
+        # elif buy_sig:
+        #     volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
+        #     if volume > 0:
+        #         signal = SignalType.BUY
+        #         signal_value = high_line
+        #         new_bar = DailyBar.objects.filter(
+        #             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+        #         price = calc_his_up_limit(inst, new_bar)
+        # # 做空
+        # elif sell_sig:
+        #     volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
+        #     if volume > 0:
+        #         signal = SignalType.SELL_SHORT
+        #         signal_value = low_line
+        #         new_bar = DailyBar.objects.filter(
+        #             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
+        #         price = calc_his_down_limit(inst, new_bar)
+        # if signal is not None:
+        #     Signal.objects.update_or_create(
+        #         strategy=strategy, instrument=inst, type=signal, trigger_time=day, defaults={
+        #             'price': price, 'volume': volume, 'trigger_value': signal_value,
+        #             'priority': PriorityType.Normal, 'processed': False})
     except Exception as e:
         print('calc_signal failed:', e)
 

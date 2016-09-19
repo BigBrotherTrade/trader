@@ -464,6 +464,7 @@ class TradeStrategy(BaseModule):
             if trade['OffsetFlag'] == ApiStruct.OF_Open:
                 last_trade, created = Trade.objects.update_or_create(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst,
+                    code=trade['InstrumentID'],
                     open_time__date=datetime.datetime.strptime(trade['TradingDay'], '%Y%m%d').replace(
                         tzinfo=pytz.FixedOffset(480)).date(),
                     direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
@@ -498,6 +499,7 @@ class TradeStrategy(BaseModule):
             else:
                 last_trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst,
+                    code=trade['InstrumentID'],
                     direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Sell else DirectionType.SHORT,
                     close_time__isnull=True).first()
                 if last_trade is not None:
@@ -719,18 +721,6 @@ class TradeStrategy(BaseModule):
             for inst in Instrument.objects.all():
                 inst_set += inst.all_inst.split(',')
             await self.UnSubscribeMarketData(inst_set)
-
-    @param_function(crontab='50 8 * * *')
-    async def backend_login_day(self):
-        self.redis_client.publish(
-            self.__request_format.format('ReqSettlementInfoConfirm'),
-            json.dumps({'RequestID': self.next_id()}))
-
-    @param_function(crontab='50 20 * * *')
-    async def backend_login_night(self):
-        self.redis_client.publish(
-            self.__request_format.format('ReqSettlementInfoConfirm'),
-            json.dumps({'RequestID': self.next_id()}))
 
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
