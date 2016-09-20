@@ -109,7 +109,8 @@ KT_MARKET = {
 
 
 class SignalType(DjangoChoices):
-    ROLLOVER = C(label='换月移仓')
+    ROLL_CLOSE = C(label='换月平旧')
+    ROLL_OPEN = C(label='换月开新')
     BUY = C(label='买开')
     SELL_SHORT = C(label='卖开')
     SELL = C(label='卖平')

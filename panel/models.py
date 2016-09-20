@@ -141,6 +141,7 @@ class Instrument(models.Model):
 class Signal(models.Model):
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.CASCADE)
     instrument = models.ForeignKey(Instrument, verbose_name='品种', on_delete=models.CASCADE)
+    code = models.CharField('当前合约', max_length=8, null=True)
     type = models.CharField('信号类型', max_length=16, choices=SignalType.choices)
     trigger_value = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='触发值', null=True, blank=True)
     price = models.DecimalField('价格', max_digits=12, decimal_places=3, null=True, blank=True)
@@ -160,7 +161,7 @@ class Signal(models.Model):
 class MainBar(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
     product_code = models.CharField('品种代码', max_length=8, null=True, db_index=True)
-    cur_code = models.CharField('当前合约', max_length=8, null=True)
+    code = models.CharField('合约代码', max_length=8, null=True, blank=True)
     time = models.DateField('时间', db_index=True)
     open = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='开盘价')
     high = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='最高价')
