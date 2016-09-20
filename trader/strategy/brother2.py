@@ -990,8 +990,13 @@ class TradeStrategy(BaseModule):
                     self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
             elif signal.type == SignalType.ROLL_OPEN:
                 pos = Trade.objects.filter(
-                    Q(close_time__isnull=True) | Q(close_time__date=datetime.datetime.today().date()),
-                    shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
+                    close_time__isnull=True, shares=signal.volume, code=inst.last_main,
+                    instrument=inst, shares__gt=0).first()
+                if pos is None:
+                    pos = Trade.objects.filter(
+                        close_time__gte=datetime.datetime.today().replace(
+                            tzinfo=pytz.FixedOffset(480)).date(),
+                        shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
                 if pos.direction == DirectionType.LONG:
                     if use_tick:
                         tick = json.loads(self.redis_client.get(signal.code))
