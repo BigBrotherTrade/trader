@@ -937,71 +937,72 @@ class TradeStrategy(BaseModule):
         :param use_tick: 是否使用当天tick的涨跌停价下单
         :return: None
         """
-        signal = Signal.objects.filter(strategy=self.__strategy, instrument=inst, processed=False).first()
-        logger.info('%s 当前信号: %s', inst, signal)
-        if signal is None:
+        signals = Signal.objects.filter(strategy=self.__strategy, instrument=inst, processed=False).all()
+        logger.info('%s 当前信号: %s', inst, signals)
+        if not signals:
             return
-        price = signal.price
-        if signal.type == SignalType.BUY:
-            if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
-                price = tick['UpperLimitPrice']
-            logger.info('%s 开多%s手 价格: %s', inst, signal.volume, price)
-            self.io_loop.create_task(self.buy(inst, price, signal.volume))
-        elif signal.type == SignalType.SELL_SHORT:
-            if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
-                price = tick['LowerLimitPrice']
-            logger.info('%s 开空%s手 价格: %s', inst, signal.volume, price)
-            self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
-        elif signal.type == SignalType.BUY_COVER:
-            pos = Trade.objects.filter(
-                code=signal.code, close_time__isnull=True, direction=DirectionType.SHORT,
-                instrument=inst, shares__gt=0).first()
-            if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
-                price = tick['UpperLimitPrice']
-            logger.info('%s 平空%s手 价格: %s', pos.instrument, signal.volume, price)
-            self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
-        elif signal.type == SignalType.SELL:
-            pos = Trade.objects.filter(
-                code=signal.code, close_time__isnull=True, direction=DirectionType.LONG,
-                instrument=inst, shares__gt=0).first()
-            if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
-                price = tick['LowerLimitPrice']
-            logger.info('%s 平多%s手 价格: %s', pos.instrument, signal.volume, price)
-            self.io_loop.create_task(self.sell(pos, price, signal.volume))
-        elif signal.type == SignalType.ROLL_CLOSE:
-            pos = Trade.objects.filter(
-                code=signal.code, close_time__isnull=True, instrument=inst, shares__gt=0).first()
-            if pos.direction == DirectionType.LONG:
-                if use_tick:
-                    tick = json.loads(self.redis_client.get(signal.code))
-                    price = tick['LowerLimitPrice']
-                logger.info('%s->%s 多头换月平旧%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
-                self.io_loop.create_task(self.sell(pos, price, signal.volume))
-            else:
-                logger.info('%s->%s 空头换月平旧%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
+        for signal in signals:
+            price = signal.price
+            if signal.type == SignalType.BUY:
                 if use_tick:
                     tick = json.loads(self.redis_client.get(signal.code))
                     price = tick['UpperLimitPrice']
-                self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
-        elif signal.type == SignalType.ROLL_OPEN:
-            pos = Trade.objects.filter(
-                code=inst.last_main, close_time__isnull=True, instrument=inst, shares__gt=0).first()
-            if pos.direction == DirectionType.LONG:
-                if use_tick:
-                    tick = json.loads(self.redis_client.get(signal.code))
-                    price = tick['UpperLimitPrice']
-                logger.info('%s->%s 多头换月开新%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
+                logger.info('%s 开多%s手 价格: %s', inst, signal.volume, price)
                 self.io_loop.create_task(self.buy(inst, price, signal.volume))
-            else:
+            elif signal.type == SignalType.SELL_SHORT:
                 if use_tick:
                     tick = json.loads(self.redis_client.get(signal.code))
                     price = tick['LowerLimitPrice']
-                logger.info('%s->%s 空头换月开新%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
+                logger.info('%s 开空%s手 价格: %s', inst, signal.volume, price)
                 self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
+            elif signal.type == SignalType.BUY_COVER:
+                pos = Trade.objects.filter(
+                    code=signal.code, close_time__isnull=True, direction=DirectionType.SHORT,
+                    instrument=inst, shares__gt=0).first()
+                if use_tick:
+                    tick = json.loads(self.redis_client.get(signal.code))
+                    price = tick['UpperLimitPrice']
+                logger.info('%s 平空%s手 价格: %s', pos.instrument, signal.volume, price)
+                self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
+            elif signal.type == SignalType.SELL:
+                pos = Trade.objects.filter(
+                    code=signal.code, close_time__isnull=True, direction=DirectionType.LONG,
+                    instrument=inst, shares__gt=0).first()
+                if use_tick:
+                    tick = json.loads(self.redis_client.get(signal.code))
+                    price = tick['LowerLimitPrice']
+                logger.info('%s 平多%s手 价格: %s', pos.instrument, signal.volume, price)
+                self.io_loop.create_task(self.sell(pos, price, signal.volume))
+            elif signal.type == SignalType.ROLL_CLOSE:
+                pos = Trade.objects.filter(
+                    code=signal.code, close_time__isnull=True, instrument=inst, shares__gt=0).first()
+                if pos.direction == DirectionType.LONG:
+                    if use_tick:
+                        tick = json.loads(self.redis_client.get(signal.code))
+                        price = tick['LowerLimitPrice']
+                    logger.info('%s->%s 多头换月平旧%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
+                    self.io_loop.create_task(self.sell(pos, price, signal.volume))
+                else:
+                    logger.info('%s->%s 空头换月平旧%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
+                    if use_tick:
+                        tick = json.loads(self.redis_client.get(signal.code))
+                        price = tick['UpperLimitPrice']
+                    self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
+            elif signal.type == SignalType.ROLL_OPEN:
+                pos = Trade.objects.filter(
+                    code=inst.last_main, close_time__isnull=True, instrument=inst, shares__gt=0).first()
+                if pos.direction == DirectionType.LONG:
+                    if use_tick:
+                        tick = json.loads(self.redis_client.get(signal.code))
+                        price = tick['UpperLimitPrice']
+                    logger.info('%s->%s 多头换月开新%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
+                    self.io_loop.create_task(self.buy(inst, price, signal.volume))
+                else:
+                    if use_tick:
+                        tick = json.loads(self.redis_client.get(signal.code))
+                        price = tick['LowerLimitPrice']
+                    logger.info('%s->%s 空头换月开新%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
+                    self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
 
     def calc_up_limit(self, inst: Instrument, bar: DailyBar):
         tick = json.loads(self.redis_client.get(bar.code))
