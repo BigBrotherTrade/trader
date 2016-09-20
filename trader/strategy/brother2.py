@@ -450,7 +450,8 @@ class TradeStrategy(BaseModule):
         try:
             inst = channel.split(':')[-1]
             tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
-            logger.info('inst=%s, tick: %s', inst, tick)
+            if datetime.datetime.now().hour < 9:
+                logger.info('inst=%s, tick: %s', inst, tick)
         except Exception as ee:
             logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
@@ -594,44 +595,44 @@ class TradeStrategy(BaseModule):
         except Exception as ee:
             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
 
-    @param_function(crontab='56 8 * * *')
-    async def check_signal_processed1(self):
-        day = datetime.datetime.today()
-        day = day.replace(tzinfo=pytz.FixedOffset(480))
-        _, trading = await is_trading_day(day)
-        if trading:
-            logger.info('查询遗漏的日盘信号..')
-            for sig in Signal.objects.filter(
-                    ~Q(instrument__exchange=ExchangeType.CFFEX),
-                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
-                logger.info('发现遗漏信号: %s', sig)
-                self.process_signal(sig.instrument)
-
-    @param_function(crontab='11 9 * * *')
-    async def check_signal_processed2(self):
-        day = datetime.datetime.today()
-        day = day.replace(tzinfo=pytz.FixedOffset(480))
-        _, trading = await is_trading_day(day)
-        if trading:
-            logger.info('查询遗漏的国债信号..')
-            for sig in Signal.objects.filter(
-                    instrument__exchange=ExchangeType.CFFEX,
-                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
-                logger.info('发现遗漏信号: %s', sig)
-                self.process_signal(sig.instrument)
-
-    @param_function(crontab='56 20 * * *')
-    async def check_signal_processed3(self):
-        day = datetime.datetime.today()
-        day = day.replace(tzinfo=pytz.FixedOffset(480))
-        _, trading = await is_trading_day(day)
-        if trading:
-            logger.info('查询遗漏的夜盘信号..')
-            for sig in Signal.objects.filter(
-                    ~Q(instrument__exchange=ExchangeType.CFFEX),
-                    strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
-                logger.info('发现遗漏信号: %s', sig)
-                self.process_signal(sig.instrument)
+    # @param_function(crontab='56 8 * * *')
+    # async def check_signal_processed1(self):
+    #     day = datetime.datetime.today()
+    #     day = day.replace(tzinfo=pytz.FixedOffset(480))
+    #     _, trading = await is_trading_day(day)
+    #     if trading:
+    #         logger.info('查询遗漏的日盘信号..')
+    #         for sig in Signal.objects.filter(
+    #                 ~Q(instrument__exchange=ExchangeType.CFFEX),
+    #                 strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+    #             logger.info('发现遗漏信号: %s', sig)
+    #             self.process_signal(sig.instrument)
+    #
+    # @param_function(crontab='11 9 * * *')
+    # async def check_signal_processed2(self):
+    #     day = datetime.datetime.today()
+    #     day = day.replace(tzinfo=pytz.FixedOffset(480))
+    #     _, trading = await is_trading_day(day)
+    #     if trading:
+    #         logger.info('查询遗漏的国债信号..')
+    #         for sig in Signal.objects.filter(
+    #                 instrument__exchange=ExchangeType.CFFEX,
+    #                 strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+    #             logger.info('发现遗漏信号: %s', sig)
+    #             self.process_signal(sig.instrument)
+    #
+    # @param_function(crontab='56 20 * * *')
+    # async def check_signal_processed3(self):
+    #     day = datetime.datetime.today()
+    #     day = day.replace(tzinfo=pytz.FixedOffset(480))
+    #     _, trading = await is_trading_day(day)
+    #     if trading:
+    #         logger.info('查询遗漏的夜盘信号..')
+    #         for sig in Signal.objects.filter(
+    #                 ~Q(instrument__exchange=ExchangeType.CFFEX),
+    #                 strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
+    #             logger.info('发现遗漏信号: %s', sig)
+    #             self.process_signal(sig.instrument)
 
     @param_function(crontab='20 15 * * *')
     async def refresh_instrument(self):
