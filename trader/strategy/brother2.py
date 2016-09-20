@@ -466,8 +466,8 @@ class TradeStrategy(BaseModule):
                 last_trade, created = Trade.objects.update_or_create(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst,
                     code=trade['InstrumentID'],
-                    open_time__date=datetime.datetime.strptime(trade['TradingDay'], '%Y%m%d').replace(
-                        tzinfo=pytz.FixedOffset(480)).date(),
+                    open_time__startswith='{}-{}-{}'.format(
+                        trade['TradingDay'][0:4], trade['TradingDay'][4:6], trade['TradingDay'][6:8]),
                     direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Buy
                     else DirectionType.SHORT, close_time__isnull=True, defaults={
                         'open_order': order,
@@ -990,13 +990,8 @@ class TradeStrategy(BaseModule):
                     self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
             elif signal.type == SignalType.ROLL_OPEN:
                 pos = Trade.objects.filter(
-                    close_time__isnull=True, shares=signal.volume, code=inst.last_main,
-                    instrument=inst, shares__gt=0).first()
-                if pos is None:
-                    pos = Trade.objects.filter(
-                        close_time__gte=datetime.datetime.today().replace(
-                            tzinfo=pytz.FixedOffset(480)).date(),
-                        shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
+                    Q(close_time__isnull=True) | Q(close_time__startswith=datetime.date.today()),
+                    shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
                 if pos.direction == DirectionType.LONG:
                     if use_tick:
                         tick = json.loads(self.redis_client.get(signal.code))
