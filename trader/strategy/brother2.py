@@ -18,7 +18,6 @@ import random
 import re
 from collections import defaultdict
 import datetime
-
 import pytz
 from decimal import Decimal
 
@@ -154,6 +153,12 @@ class TradeStrategy(BaseModule):
     async def start(self):
         await self.query('TradingAccount')
         await self.query('InvestorPositionDetail')
+        day = datetime.datetime.today()
+        day = day.replace(tzinfo=pytz.FixedOffset(480))
+        for inst_obj in Instrument.objects.all():
+            logger.info('计算连续合约, 交易信号: %s', inst_obj.name)
+            calc_main_inst(inst_obj, day)
+            self.calc_signal(inst_obj, day)
         # await self.collect_tick_stop()
         # await self.collect_quote()
         # day = datetime.datetime.strptime('20160905', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))

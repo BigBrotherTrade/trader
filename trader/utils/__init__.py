@@ -272,7 +272,7 @@ async def update_from_cffex(day: datetime.datetime):
 def store_main_bar(bar: DailyBar):
     MainBar.objects.update_or_create(
         exchange=bar.exchange, product_code=re.findall('[A-Za-z]+', bar.code)[0], time=bar.time, defaults={
-            'cur_code': bar.code,
+            'code': bar.code,
             'open': bar.open,
             'high': bar.high,
             'low': bar.low,
@@ -649,7 +649,7 @@ def load_kt_data(directory: str = '/Users/jeffchen/kt_data/'):
                         change_time = '{}-{}-{}'.format(date[:4], date[4:6], date[6:8])
                     insert_list.append(
                         MainBar(
-                            exchange=KT_MARKET[market], product_code=code, cur_code=main_code,
+                            exchange=KT_MARKET[market], product_code=code, code=main_code,
                             time='{}-{}-{}'.format(date[:4], date[4:6], date[6:8]),
                             open=oo, high=hh, low=ll, close=cc, settlement=se, open_interest=oi, volume=vo,
                             basis=None))
