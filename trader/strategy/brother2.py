@@ -152,6 +152,7 @@ class TradeStrategy(BaseModule):
 
     async def start(self):
         await self.query('TradingAccount')
+        self.__shares.clear()
         await self.query('InvestorPositionDetail')
         # await self.collect_tick_stop()
         # await self.collect_quote()
@@ -638,19 +639,8 @@ class TradeStrategy(BaseModule):
         logger.info('更新账户')
         await self.query('TradingAccount')
         logger.info('更新持仓')
-        pos_list = await self.query('InvestorPositionDetail')
-        for pos in pos_list:
-            if pos['Volume'] > 0:
-                old_pos = self.__shares.get(pos['InstrumentID'])
-                if old_pos is None:
-                    self.__shares[pos['InstrumentID']] = pos
-                else:
-                    old_pos['OpenPrice'] = (old_pos['OpenPrice'] * old_pos['Volume'] +
-                                            pos['OpenPrice'] * pos['Volume']) / (old_pos['Volume'] + pos['Volume'])
-                    old_pos['Volume'] += pos['Volume']
-                    old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
-                    old_pos['Margin'] += pos['Margin']
-        self.update_position()
+        self.__shares.clear()
+        await self.query('InvestorPositionDetail')
         logger.info('更新合约列表..')
         inst_set = defaultdict(set)
         inst_dict = defaultdict(dict)

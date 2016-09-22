@@ -45,14 +45,6 @@ max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
 
-his_break_n = 0
-his_atr_n = 0
-his_long_n = 0
-his_short_n = 0
-his_stop_n = 0
-his_risk = 0
-his_current = 0
-
 
 def str_to_number(s):
     try:
@@ -466,25 +458,15 @@ def fetch_from_quandl_all():
         fetch_from_quandl(inst)
 
 
-def fetch_strategy_param(strategy: Strategy):
-    global his_break_n
-    global his_atr_n
-    global his_long_n
-    global his_short_n
-    global his_stop_n
-    global his_risk
-    global his_current
-    his_break_n = strategy.param_set.get(code='BreakPeriod').int_value
-    his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
-    his_long_n = strategy.param_set.get(code='LongPeriod').int_value
-    his_short_n = strategy.param_set.get(code='ShortPeriod').int_value
-    his_stop_n = strategy.param_set.get(code='StopLoss').int_value
-    his_risk = strategy.param_set.get(code='Risk').float_value
-    his_current = 10000000
-
-
-def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
+def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy, cash: Decimal):
     try:
+        his_break_n = strategy.param_set.get(code='BreakPeriod').int_value
+        his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
+        his_long_n = strategy.param_set.get(code='LongPeriod').int_value
+        his_short_n = strategy.param_set.get(code='ShortPeriod').int_value
+        his_stop_n = strategy.param_set.get(code='StopLoss').int_value
+        his_risk = strategy.param_set.get(code='Risk').float_value
+        his_current = cash
         df = to_df(MainBar.objects.filter(
             exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
             'time', 'open', 'high', 'low', 'close', 'settlement'))
