@@ -122,6 +122,12 @@ class TradeStrategy(BaseModule):
             inst = Instrument.objects.filter(
                 exchange=pos['ExchangeID'],
                 product_code=re.findall('[A-Za-z]+', pos['InstrumentID'])[0]).first()
+            tick = json.loads(self.redis_client.get(pos['InstrumentID']))
+            if pos['Direction'] == ApiStruct.D_Buy:
+                profit = Decimal(tick['LastPrice']) - Decimal(pos['OpenPrice'])
+            else:
+                profit = Decimal(pos['OpenPrice']) - Decimal(tick['LastPrice'])
+            profit = profit * Decimal(pos['Volume']) * inst.volume_multiple
             Trade.objects.update_or_create(
                 broker=self.__broker, strategy=self.__strategy, instrument=inst,
                 code=pos['InstrumentID'],
@@ -134,7 +140,7 @@ class TradeStrategy(BaseModule):
                     'avg_entry_price': Decimal(pos['OpenPrice']),
                     'cost': pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money *
                             inst.volume_multiple + pos['Volume'] * inst.fee_volume,
-                    'profit': Decimal(pos['PositionProfitByTrade']), 'frozen_margin': Decimal(pos['Margin'])})
+                    'profit': profit, 'frozen_margin': Decimal(pos['Margin'])})
 
     @staticmethod
     async def query_reader(ch: aioredis.Channel, cb: asyncio.Future):
@@ -714,7 +720,7 @@ class TradeStrategy(BaseModule):
                 inst_set += inst.all_inst.split(',')
             await self.SubscribeMarketData(inst_set)
 
-    @param_function(crontab='0 10 * * *')
+    @param_function(crontab='16 15 * * *')
     async def collect_day_tick_stop(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
         day, trading = await is_trading_day(day)
@@ -736,7 +742,7 @@ class TradeStrategy(BaseModule):
                 inst_set += inst.all_inst.split(',')
             await self.SubscribeMarketData(inst_set)
 
-    @param_function(crontab='0 22 * * *')
+    @param_function(crontab='31 2 * * *')
     async def collect_night_tick_stop(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
         day, trading = await is_trading_day(day)
