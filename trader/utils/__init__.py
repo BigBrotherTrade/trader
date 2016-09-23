@@ -458,124 +458,99 @@ def fetch_from_quandl_all():
         fetch_from_quandl(inst)
 
 
-def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy, cash: Decimal):
-    try:
-        his_break_n = strategy.param_set.get(code='BreakPeriod').int_value
-        his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
-        his_long_n = strategy.param_set.get(code='LongPeriod').int_value
-        his_short_n = strategy.param_set.get(code='ShortPeriod').int_value
-        his_stop_n = strategy.param_set.get(code='StopLoss').int_value
-        his_risk = strategy.param_set.get(code='Risk').float_value
-        his_current = cash
-        df = to_df(MainBar.objects.filter(
-            exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
-            'time', 'open', 'high', 'low', 'close', 'settlement'))
-        df.index = pd.DatetimeIndex(df.time)
-        df['atr'] = ATR(df, timeperiod=his_atr_n)
-        df['short_trend'] = SMA(df, timeperiod=his_short_n)
-        df['long_trend'] = SMA(df, timeperiod=his_long_n)
-        df['high_line'] = df.close.rolling(window=his_break_n).max()
-        df['low_line'] = df.close.rolling(window=his_break_n).min()
-        pos = 0
-        pos_idx = None
-        for idx in range(his_long_n - 1, df.shape[0]):
-            if pos == 0:
-                if df.short_trend[idx] > df.long_trend[idx] and df.close[idx] > df.high_line[idx-1]:
-                    pass
-                elif df.short_trend[idx] < df.long_trend[idx] and df.close[idx] < df.low_line[idx-1]:
-                    pass
-            elif pos > 0:
-                pass
-        #
-        # # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未未平仓或今天以后平仓(回测用)
-        # pos = Trade.objects.filter(
-        #     Q(close_time__isnull=True) | Q(close_time__gt=day),
-        #     instrument=inst, shares__gt=0, open_time__lt=day).first()
-        # roll_over = False
-        # open_count = 1
-        # if pos is not None:
-        #     roll_over = pos.code != inst.main_code
-        #     open_count = MainBar.objects.filter(
-        #         exchange=inst.exchange, product_code=inst.product_code,
-        #         time__gte=pos.open_time.date(), time__lte=day.date()).count()
-        # signal = None
-        # signal_value = None
-        # price = None
-        # volume = None
-        # if pos is not None:
-        #     # 多头持仓
-        #     if pos.direction == DirectionType.LONG:
-        #         hh = float(MainBar.objects.filter(
-        #             exchange=inst.exchange, product_code=pos.instrument.product_code,
-        #             time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
-        #         # 多头止损
-        #         if close <= hh - atr_s[-open_count] * his_stop_n:
-        #             signal = SignalType.SELL
-        #             # 止损时 signal_value 为止损价
-        #             signal_value = hh - atr_s[-open_count] * his_stop_n
-        #             volume = pos.shares
-        #             last_bar = DailyBar.objects.filter(
-        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
-        #             price = calc_his_down_limit(inst, last_bar)
-        #         # 多头换月
-        #         elif roll_over:
-        #             signal = SignalType.ROLLOVER
-        #             volume = pos.shares
-        #             last_bar = DailyBar.objects.filter(
-        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
-        #             # 换月时 signal_value 为旧合约的平仓价
-        #             signal_value = calc_his_down_limit(inst, last_bar)
-        #             new_bar = DailyBar.objects.filter(
-        #                 exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-        #             price = calc_his_up_limit(inst, new_bar)
-        #     # 空头持仓
-        #     else:
-        #         ll = float(MainBar.objects.filter(
-        #             exchange=inst.exchange, product_code=pos.instrument.product_code,
-        #             time__gte=pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
-        #         # 空头止损
-        #         if close >= ll + atr_s[-open_count] * his_stop_n:
-        #             signal = SignalType.BUY_COVER
-        #             signal_value = ll + atr_s[-open_count] * his_stop_n
-        #             volume = pos.shares
-        #             last_bar = DailyBar.objects.filter(
-        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
-        #             price = calc_his_up_limit(inst, last_bar)
-        #         # 空头换月
-        #         elif roll_over:
-        #             signal = SignalType.ROLLOVER
-        #             volume = pos.shares
-        #             last_bar = DailyBar.objects.filter(
-        #                 exchange=inst.exchange, code=pos.code, time=day.date()).first()
-        #             signal_value = calc_his_up_limit(inst, last_bar)
-        #             new_bar = DailyBar.objects.filter(
-        #                 exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-        #             price = calc_his_down_limit(inst, new_bar)
-        # # 做多
-        # elif buy_sig:
-        #     volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
-        #     if volume > 0:
-        #         signal = SignalType.BUY
-        #         signal_value = high_line
-        #         new_bar = DailyBar.objects.filter(
-        #             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-        #         price = calc_his_up_limit(inst, new_bar)
-        # # 做空
-        # elif sell_sig:
-        #     volume = his_current * his_risk // (Decimal(atr) * Decimal(inst.volume_multiple))
-        #     if volume > 0:
-        #         signal = SignalType.SELL_SHORT
-        #         signal_value = low_line
-        #         new_bar = DailyBar.objects.filter(
-        #             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-        #         price = calc_his_down_limit(inst, new_bar)
-        # if signal is not None:
-        #     Signal.objects.update_or_create(
-        #         strategy=strategy, instrument=inst, type=signal, trigger_time=day, defaults={
-        #             'price': price, 'volume': volume, 'trigger_value': signal_value,
-        #             'priority': PriorityType.Normal, 'processed': False})
-    except Exception as e:
-        print('calc_signal failed:', e)
+def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
+    his_break_n = strategy.param_set.get(code='BreakPeriod').int_value
+    his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
+    his_long_n = strategy.param_set.get(code='LongPeriod').int_value
+    his_short_n = strategy.param_set.get(code='ShortPeriod').int_value
+    his_stop_n = strategy.param_set.get(code='StopLoss').int_value
+    df = to_df(MainBar.objects.filter(
+        time__lte=day.date(),
+        exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
+        'time', 'open', 'high', 'low', 'close', 'settlement'))
+    df.index = pd.DatetimeIndex(df.time)
+    df['atr'] = ATR(df, timeperiod=his_atr_n)
+    df['short_trend'] = SMA(df, timeperiod=his_short_n)
+    df['long_trend'] = SMA(df, timeperiod=his_long_n)
+    df['high_line'] = df.close.rolling(window=his_break_n).max()
+    df['low_line'] = df.close.rolling(window=his_break_n).min()
+    cur_pos = 0
+    last_trade = None
+    for cur_idx in range(his_long_n, df.shape[0]):
+        idx = cur_idx - 1
+        cur_date = df.index[cur_idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
+        prev_date = df.index[idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
+        if cur_pos == 0:
+            if df.short_trend[idx] > df.long_trend[idx] and df.close[idx] > df.high_line[idx-1]:
+                new_bar = MainBar.objects.filter(
+                    exchange=inst.exchange, product_code=inst.product_code, time=cur_date).first()
+                Signal.objects.create(
+                    code=new_bar.code, trigger_value=df.atr[idx],
+                    strategy=strategy, instrument=inst, type=SignalType.BUY, processed=True,
+                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                last_trade = Trade.objects.create(
+                    broker=strategy.broker, strategy=strategy, instrument=inst,
+                    code=new_bar.code, direction=DirectionType.LONG,
+                    open_time=cur_date, shares=1, filled_shares=1, avg_entry_price=new_bar.open)
+                cur_pos = cur_idx
+            elif df.short_trend[idx] < df.long_trend[idx] and df.close[idx] < df.low_line[idx-1]:
+                new_bar = MainBar.objects.filter(
+                    exchange=inst.exchange, product_code=inst.product_code,
+                    time=df.index[cur_idx].to_pydatetime().date()).first()
+                Signal.objects.create(
+                    code=new_bar.code, trigger_value=df.atr[idx],
+                    strategy=strategy, instrument=inst, type=SignalType.SELL_SHORT, processed=True,
+                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                last_trade = Trade.objects.create(
+                    broker=strategy.broker, strategy=strategy, instrument=inst,
+                    code=new_bar.code, direction=DirectionType.SHORT,
+                    open_time=cur_date, shares=1, filled_shares=1, avg_entry_price=new_bar.open)
+                cur_pos = cur_idx * -1
+        elif cur_pos > 0 and prev_date > last_trade.open_time:
+            hh = float(MainBar.objects.filter(
+                exchange=inst.exchange, product_code=inst.product_code,
+                time__gte=last_trade.open_time,
+                time__lt=prev_date).aggregate(Max('high'))['high__max'])
+            if df.close[idx] <= hh - df.atr[cur_pos] * his_stop_n:
+                new_bar = MainBar.objects.filter(
+                    exchange=inst.exchange, product_code=inst.product_code,
+                    time=df.index[cur_idx].to_pydatetime().date()).first()
+                Signal.objects.create(
+                    strategy=strategy, instrument=inst, type=SignalType.SELL, processed=True,
+                    code=new_bar.code,
+                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                last_trade.avg_exit_price = new_bar.open
+                last_trade.close_time = cur_date
+                last_trade.closed_shares = 1
+                last_trade.profit = (new_bar.open - last_trade.avg_entry_price) * inst.volume_multiple
+                last_trade.save()
+                cur_pos = 0
+        elif cur_pos < 0 and prev_date > last_trade.open_time:
+            ll = float(MainBar.objects.filter(
+                exchange=inst.exchange, product_code=inst.product_code,
+                time__gte=last_trade.open_time,
+                time__lt=prev_date).aggregate(Min('low'))['low__min'])
+            if df.close[idx] >= ll - df.atr[cur_pos * -1] * his_stop_n:
+                new_bar = MainBar.objects.filter(
+                    exchange=inst.exchange, product_code=inst.product_code,
+                    time=df.index[cur_idx].to_pydatetime().date()).first()
+                Signal.objects.create(
+                    code=new_bar.code,
+                    strategy=strategy, instrument=inst, type=SignalType.BUY_COVER, processed=True,
+                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                last_trade.avg_exit_price = new_bar.open
+                last_trade.close_time = cur_date
+                last_trade.closed_shares = 1
+                last_trade.profit = (last_trade.avg_entry_price - new_bar.open) * inst.volume_multiple
+                last_trade.save()
+                cur_pos = 0
+
+
+def calc_his_all(day: datetime.datetime):
+    strategy = Strategy.objects.get(name='大哥2.0')
+    for inst in strategy.instruments.all():
+        print('process', inst)
+        calc_history_signal(inst, day, strategy)
 
 
 def calc_his_up_limit(inst: Instrument, bar: DailyBar):

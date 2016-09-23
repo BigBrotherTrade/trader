@@ -128,6 +128,7 @@ class TradeStrategy(BaseModule):
             else:
                 profit = Decimal(pos['OpenPrice']) - Decimal(tick['LastPrice'])
             profit = profit * Decimal(pos['Volume']) * inst.volume_multiple
+            print(inst, profit)
             Trade.objects.update_or_create(
                 broker=self.__broker, strategy=self.__strategy, instrument=inst,
                 code=pos['InstrumentID'],

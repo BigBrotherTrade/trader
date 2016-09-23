@@ -14,7 +14,7 @@ else:
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 django.setup()
 from trader.utils import is_trading_day, update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, \
-    create_main_all, fetch_from_quandl_all, clean_daily_bar, load_kt_data
+    create_main_all, fetch_from_quandl_all, clean_daily_bar, load_kt_data, calc_his_all
 
 
 async def fetch_bar():
@@ -64,4 +64,5 @@ async def fetch_bar2():
 # create_main_all()
 # fetch_from_quandl_all()
 # clean_dailybar()
-load_kt_data()
+# load_kt_data()
+calc_his_all(datetime.datetime.strptime('2016-09-22', '%Y-%m-%d').replace(tzinfo=pytz.FixedOffset(480)))
