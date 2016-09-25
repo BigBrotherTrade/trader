@@ -44,6 +44,10 @@ max_conn_dce = asyncio.Semaphore(5)
 max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
+cffex_ip = '183.195.155.138'    # www.cffex.com.cn
+shfe_ip = '220.248.39.134'      # www.shfe.com.cn
+czce_ip = '220.194.205.169'     # www.czce.com.cn
+dce_ip = '218.25.154.94'        # www.dce.com.cn
 
 
 def str_to_number(s):
@@ -79,7 +83,7 @@ async def is_trading_day(day: datetime.datetime):
     async with aiohttp.ClientSession() as session:
         await max_conn_cffex.acquire()
         async with session.get(
-                'http://www.cffex.com.cn/fzjy/mrhq/{}/index.xml'.format(day.strftime('%Y%m/%d')),
+                'http://{}/fzjy/mrhq/{}/index.xml'.format(cffex_ip, day.strftime('%Y%m/%d')),
                 allow_redirects=False) as response:
             max_conn_cffex.release()
             return day, response.status != 302
@@ -99,7 +103,7 @@ async def update_from_shfe(day: datetime.datetime):
     async with aiohttp.ClientSession() as session:
         day_str = day.strftime('%Y%m%d')
         await max_conn_shfe.acquire()
-        async with session.get('http://www.shfe.com.cn/data/dailydata/kx/kx{}.dat'.format(day_str)) as response:
+        async with session.get('http://{}/data/dailydata/kx/kx{}.dat'.format(shfe_ip, day_str)) as response:
             rst_json = await response.json()
             max_conn_shfe.release()
             for inst_data in rst_json['o_curinstrument']:
@@ -144,12 +148,12 @@ async def update_from_czce(day: datetime.datetime):
     async with aiohttp.ClientSession() as session:
         day_str = day.strftime('%Y%m%d')
         rst = await fetch_czce_page(
-            session, 'http://www.czce.com.cn/portal/DFSStaticFiles/Future/{}/{}/FutureDataDaily.txt'.format(
-                day.year, day_str))
+            session, 'http://{}/portal/DFSStaticFiles/Future/{}/{}/FutureDataDaily.txt'.format(
+                czce_ip, day.year, day_str))
         if rst is None:
             rst = await fetch_czce_page(
-                session, 'http://www.czce.com.cn/portal/exchange/{}/datadaily/{}.txt'.format(
-                    day.year, day_str))
+                session, 'http://{}/portal/exchange/{}/datadaily/{}.txt'.format(
+                    czce_ip, day.year, day_str))
         for lines in rst.split('\r\n')[1:-3]:
             if '小计' in lines or '品种' in lines:
                 continue
@@ -181,7 +185,7 @@ async def update_from_dce(day: datetime.datetime):
     async with aiohttp.ClientSession() as session:
         day_str = day.strftime('%Y%m%d')
         await max_conn_dce.acquire()
-        async with session.post('http://www.dce.com.cn/PublicWeb/MainServlet', data={
+        async with session.post('http://{}/PublicWeb/MainServlet'.format(dce_ip), data={
             'action': 'Pu00011_result', 'Pu00011_Input.trade_date': day_str, 'Pu00011_Input.variety': 'all',
             'Pu00011_Input.trade_type': 0}) as response:
             rst = await response.text()
@@ -216,8 +220,8 @@ async def update_from_dce(day: datetime.datetime):
 async def update_from_cffex(day: datetime.datetime):
     async with aiohttp.ClientSession() as session:
         await max_conn_cffex.acquire()
-        async with session.get('http://www.cffex.com.cn/fzjy/mrhq/{}/index.xml'.format(
-                day.strftime('%Y%m/%d'))) as response:
+        async with session.get('http://{}/fzjy/mrhq/{}/index.xml'.format(
+                cffex_ip, day.strftime('%Y%m/%d'))) as response:
             rst = await response.text()
             max_conn_cffex.release()
             tree = ET.fromstring(rst)
