@@ -20,34 +20,38 @@ import re
 import xml.etree.ElementTree as ET
 import asyncio
 import os
+from functools import reduce
 
 import pytz
 from bs4 import BeautifulSoup
 import aiohttp
 from django.db.models import F, Q, Max, Min
-from django.db import connection
+
 import redis
 import quandl
-import numpy as np
-import pandas as pd
-import talib
-from talib.abstract import ATR, SMA
-from django.db.models.sql import EmptyResultSet
+from talib.abstract import ATR
 from tqdm import tqdm
 
 from panel.models import *
 from trader.utils import ApiStruct
 from trader.utils.read_config import config
+# from trader.utils import logger as my_logger
+
+# logger = my_logger.get_logger('trade.utils')
 
 max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
 max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
-cffex_ip = '183.195.155.138'    # www.cffex.com.cn
-shfe_ip = '220.248.39.134'      # www.shfe.com.cn
-czce_ip = '220.194.205.169'     # www.czce.com.cn
-dce_ip = '218.25.154.94'        # www.dce.com.cn
+# cffex_ip = '183.195.155.138'    # www.cffex.com.cn
+cffex_ip = 'www.cffex.com.cn'    # www.cffex.com.cn
+# shfe_ip = '220.248.39.134'      # www.shfe.com.cn
+shfe_ip = 'www.shfe.com.cn'      # www.shfe.com.cn
+# czce_ip = '220.194.205.169'     # www.czce.com.cn
+czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
+# dce_ip = '218.25.154.94'        # www.dce.com.cn
+dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
 
 
 def str_to_number(s):
@@ -100,169 +104,186 @@ def calc_expire_date(inst_code: str, day: datetime.datetime):
 
 
 async def update_from_shfe(day: datetime.datetime):
-    async with aiohttp.ClientSession() as session:
-        day_str = day.strftime('%Y%m%d')
-        await max_conn_shfe.acquire()
-        async with session.get('http://{}/data/dailydata/kx/kx{}.dat'.format(shfe_ip, day_str)) as response:
-            rst_json = await response.json()
-            max_conn_shfe.release()
-            for inst_data in rst_json['o_curinstrument']:
-                """
-    {'OPENINTERESTCHG': -11154, 'CLOSEPRICE': 36640, 'SETTLEMENTPRICE': 36770, 'OPENPRICE': 36990,
-    'PRESETTLEMENTPRICE': 37080, 'ZD2_CHG': -310, 'DELIVERYMONTH': '1609', 'VOLUME': 51102,
-    'PRODUCTSORTNO': 10, 'ZD1_CHG': -440, 'OPENINTEREST': 86824, 'ORDERNO': 0, 'PRODUCTNAME': '铜                  ',
-    'LOWESTPRICE': 36630, 'PRODUCTID': 'cu_f    ', 'HIGHESTPRICE': 37000}
-                """
-                # error_data = inst_data
-                if inst_data['DELIVERYMONTH'] == '小计' or inst_data['PRODUCTID'] == '总计':
-                    continue
-                if '_' not in inst_data['PRODUCTID']:
-                    continue
-                DailyBar.objects.update_or_create(
-                    code=inst_data['PRODUCTID'].split('_')[0] + inst_data['DELIVERYMONTH'],
-                    exchange=ExchangeType.SHFE, time=day, defaults={
-                        'expire_date': inst_data['DELIVERYMONTH'],
-                        'open': inst_data['OPENPRICE'] if inst_data['OPENPRICE'] else inst_data['CLOSEPRICE'],
-                        'high': inst_data['HIGHESTPRICE'] if inst_data['HIGHESTPRICE'] else
-                        inst_data['CLOSEPRICE'],
-                        'low': inst_data['LOWESTPRICE'] if inst_data['LOWESTPRICE']
-                        else inst_data['CLOSEPRICE'],
-                        'close': inst_data['CLOSEPRICE'],
-                        'settlement': inst_data['SETTLEMENTPRICE'] if inst_data['SETTLEMENTPRICE'] else
-                        inst_data['PRESETTLEMENTPRICE'],
-                        'volume': inst_data['VOLUME'] if inst_data['VOLUME'] else 0,
-                        'open_interest': inst_data['OPENINTEREST'] if inst_data['OPENINTEREST'] else 0})
+    try:
+        async with aiohttp.ClientSession() as session:
+            day_str = day.strftime('%Y%m%d')
+            await max_conn_shfe.acquire()
+            async with session.get('http://{}/data/dailydata/kx/kx{}.dat'.format(shfe_ip, day_str)) as response:
+                rst_json = await response.json()
+                max_conn_shfe.release()
+                for inst_data in rst_json['o_curinstrument']:
+                    """
+        {'OPENINTERESTCHG': -11154, 'CLOSEPRICE': 36640, 'SETTLEMENTPRICE': 36770, 'OPENPRICE': 36990,
+        'PRESETTLEMENTPRICE': 37080, 'ZD2_CHG': -310, 'DELIVERYMONTH': '1609', 'VOLUME': 51102,
+        'PRODUCTSORTNO': 10, 'ZD1_CHG': -440, 'OPENINTEREST': 86824, 'ORDERNO': 0, 'PRODUCTNAME': '铜                  ',
+        'LOWESTPRICE': 36630, 'PRODUCTID': 'cu_f    ', 'HIGHESTPRICE': 37000}
+                    """
+                    # error_data = inst_data
+                    if inst_data['DELIVERYMONTH'] == '小计' or inst_data['PRODUCTID'] == '总计':
+                        continue
+                    if '_' not in inst_data['PRODUCTID']:
+                        continue
+                    DailyBar.objects.update_or_create(
+                        code=inst_data['PRODUCTID'].split('_')[0] + inst_data['DELIVERYMONTH'],
+                        exchange=ExchangeType.SHFE, time=day, defaults={
+                            'expire_date': inst_data['DELIVERYMONTH'],
+                            'open': inst_data['OPENPRICE'] if inst_data['OPENPRICE'] else inst_data['CLOSEPRICE'],
+                            'high': inst_data['HIGHESTPRICE'] if inst_data['HIGHESTPRICE'] else
+                            inst_data['CLOSEPRICE'],
+                            'low': inst_data['LOWESTPRICE'] if inst_data['LOWESTPRICE']
+                            else inst_data['CLOSEPRICE'],
+                            'close': inst_data['CLOSEPRICE'],
+                            'settlement': inst_data['SETTLEMENTPRICE'] if inst_data['SETTLEMENTPRICE'] else
+                            inst_data['PRESETTLEMENTPRICE'],
+                            'volume': inst_data['VOLUME'] if inst_data['VOLUME'] else 0,
+                            'open_interest': inst_data['OPENINTEREST'] if inst_data['OPENINTEREST'] else 0})
+    except Exception as e:
+        print('update_from_shfe failed: ' % e)
 
 
 async def fetch_czce_page(session, url):
-    await max_conn_czce.acquire()
-    rst = None
-    async with session.get(url) as response:
-        if response.status == 200:
-            rst = await response.text(encoding='gbk')
-    max_conn_czce.release()
-    return rst
+    try:
+        await max_conn_czce.acquire()
+        rst = None
+        async with session.get(url) as response:
+            if response.status == 200:
+                rst = await response.text(encoding='gbk')
+        max_conn_czce.release()
+        return rst
+    except Exception as e:
+        print('fetch_czce_page failed: ' % e)
 
 
 async def update_from_czce(day: datetime.datetime):
-    async with aiohttp.ClientSession() as session:
-        day_str = day.strftime('%Y%m%d')
-        rst = await fetch_czce_page(
-            session, 'http://{}/portal/DFSStaticFiles/Future/{}/{}/FutureDataDaily.txt'.format(
-                czce_ip, day.year, day_str))
-        if rst is None:
+    try:
+        async with aiohttp.ClientSession() as session:
+            day_str = day.strftime('%Y%m%d')
             rst = await fetch_czce_page(
-                session, 'http://{}/portal/exchange/{}/datadaily/{}.txt'.format(
+                session, 'http://{}/portal/DFSStaticFiles/Future/{}/{}/FutureDataDaily.txt'.format(
                     czce_ip, day.year, day_str))
-        for lines in rst.split('\r\n')[1:-3]:
-            if '小计' in lines or '品种' in lines:
-                continue
-            inst_data = [x.strip() for x in lines.split('|' if '|' in lines else ',')]
-            # error_data = inst_data
-            """
-[0'品种月份', 1'昨结算', 2'今开盘', 3'最高价', 4'最低价', 5'今收盘', 6'今结算', 7'涨跌1', 8'涨跌2', 9'成交量(手)', 10'空盘量', 11'增减量', 12'成交额(万元)', 13'交割结算价']
-['CF601', '11,970.00', '11,970.00', '11,970.00', '11,800.00', '11,870.00', '11,905.00', '-100.00',
-'-65.00', '13,826', '59,140', '-10,760', '82,305.24', '']
-            """
-            DailyBar.objects.update_or_create(
-                code=inst_data[0],
-                exchange=ExchangeType.CZCE, time=day, defaults={
-                    'expire_date': calc_expire_date(inst_data[0], day),
-                    'open': inst_data[2].replace(',', '') if Decimal(inst_data[2].replace(',', '')) > 0.1
-                    else inst_data[5].replace(',', ''),
-                    'high': inst_data[3].replace(',', '') if Decimal(inst_data[3].replace(',', '')) > 0.1
-                    else inst_data[5].replace(',', ''),
-                    'low': inst_data[4].replace(',', '') if Decimal(inst_data[4].replace(',', '')) > 0.1
-                    else inst_data[5].replace(',', ''),
-                    'close': inst_data[5].replace(',', ''),
-                    'settlement': inst_data[6].replace(',', '') if Decimal(inst_data[6].replace(',', '')) > 0.1 else
-                    inst_data[1].replace(',', ''),
-                    'volume': inst_data[9].replace(',', ''),
-                    'open_interest': inst_data[10].replace(',', '')})
+            if rst is None:
+                rst = await fetch_czce_page(
+                    session, 'http://{}/portal/exchange/{}/datadaily/{}.txt'.format(
+                        czce_ip, day.year, day_str))
+            for lines in rst.split('\r\n')[1:-3]:
+                if '小计' in lines or '品种' in lines:
+                    continue
+                inst_data = [x.strip() for x in lines.split('|' if '|' in lines else ',')]
+                # error_data = inst_data
+                """
+    [0'品种月份', 1'昨结算', 2'今开盘', 3'最高价', 4'最低价', 5'今收盘', 6'今结算', 7'涨跌1', 8'涨跌2', 9'成交量(手)', 10'空盘量', 11'增减量', 12'成交额(万元)', 13'交割结算价']
+    ['CF601', '11,970.00', '11,970.00', '11,970.00', '11,800.00', '11,870.00', '11,905.00', '-100.00',
+    '-65.00', '13,826', '59,140', '-10,760', '82,305.24', '']
+                """
+                close = inst_data[5].replace(',', '') if Decimal(inst_data[5].replace(',', '')) > 0.1 \
+                    else inst_data[6].replace(',', '')
+                DailyBar.objects.update_or_create(
+                    code=inst_data[0],
+                    exchange=ExchangeType.CZCE, time=day, defaults={
+                        'expire_date': calc_expire_date(inst_data[0], day),
+                        'open': inst_data[2].replace(',', '') if Decimal(inst_data[2].replace(',', '')) > 0.1
+                        else close,
+                        'high': inst_data[3].replace(',', '') if Decimal(inst_data[3].replace(',', '')) > 0.1
+                        else close,
+                        'low': inst_data[4].replace(',', '') if Decimal(inst_data[4].replace(',', '')) > 0.1
+                        else close,
+                        'close': close,
+                        'settlement': inst_data[6].replace(',', '') if Decimal(inst_data[6].replace(',', '')) > 0.1 else
+                        inst_data[1].replace(',', ''),
+                        'volume': inst_data[9].replace(',', ''),
+                        'open_interest': inst_data[10].replace(',', '')})
+    except Exception as e:
+        print('update_from_czce failed: ' % e)
 
 
 async def update_from_dce(day: datetime.datetime):
-    async with aiohttp.ClientSession() as session:
-        day_str = day.strftime('%Y%m%d')
-        await max_conn_dce.acquire()
-        async with session.post('http://{}/PublicWeb/MainServlet'.format(dce_ip), data={
-            'action': 'Pu00011_result', 'Pu00011_Input.trade_date': day_str, 'Pu00011_Input.variety': 'all',
-            'Pu00011_Input.trade_type': 0}) as response:
-            rst = await response.text()
-            max_conn_dce.release()
-            soup = BeautifulSoup(rst, 'lxml')
-            for tr in soup.select("tr")[2:-4]:
-                inst_data = list(tr.stripped_strings)
-                # error_data = inst_data
-                """
-[0'商品名称', 1'交割月份', 2'开盘价', 3'最高价', 4'最低价', 5'收盘价', 6'前结算价', 7'结算价', 8'涨跌', 9'涨跌1', 10'成交量', 11'持仓量', 12'持仓量变化', 13'成交额']
-['豆一', '1609', '3,699', '3,705', '3,634', '3,661', '3,714', '3,668', '-53', '-46', '5,746', '5,104', '-976', '21,077.13']
-                """
-                if '小计' in inst_data[0]:
-                    continue
-                DailyBar.objects.update_or_create(
-                    code=DCE_NAME_CODE[inst_data[0]] + inst_data[1],
-                    exchange=ExchangeType.DCE, time=day, defaults={
-                        'expire_date': inst_data[1],
-                        'open': inst_data[2].replace(',', '') if inst_data[2] != '-' else
-                        inst_data[5].replace(',', ''),
-                        'high': inst_data[3].replace(',', '') if inst_data[3] != '-' else
-                        inst_data[5].replace(',', ''),
-                        'low': inst_data[4].replace(',', '') if inst_data[4] != '-' else
-                        inst_data[5].replace(',', ''),
-                        'close': inst_data[5].replace(',', ''),
-                        'settlement': inst_data[7].replace(',', '') if inst_data[7] != '-' else
-                        inst_data[6].replace(',', ''),
-                        'volume': inst_data[10].replace(',', ''),
-                        'open_interest': inst_data[11].replace(',', '')})
+    try:
+        async with aiohttp.ClientSession() as session:
+            day_str = day.strftime('%Y%m%d')
+            await max_conn_dce.acquire()
+            async with session.post('http://{}/PublicWeb/MainServlet'.format(dce_ip), data={
+                'action': 'Pu00011_result', 'Pu00011_Input.trade_date': day_str, 'Pu00011_Input.variety': 'all',
+                    'Pu00011_Input.trade_type': 0}) as response:
+                rst = await response.text()
+                max_conn_dce.release()
+                soup = BeautifulSoup(rst, 'lxml')
+                for tr in soup.select("tr")[2:-4]:
+                    inst_data = list(tr.stripped_strings)
+                    # error_data = inst_data
+                    """
+    [0'商品名称', 1'交割月份', 2'开盘价', 3'最高价', 4'最低价', 5'收盘价', 6'前结算价', 7'结算价', 8'涨跌', 9'涨跌1', 10'成交量', 11'持仓量', 12'持仓量变化', 13'成交额']
+    ['豆一', '1609', '3,699', '3,705', '3,634', '3,661', '3,714', '3,668', '-53', '-46', '5,746', '5,104', '-976', '21,077.13']
+                    """
+                    if '小计' in inst_data[0]:
+                        continue
+                    DailyBar.objects.update_or_create(
+                        code=DCE_NAME_CODE[inst_data[0]] + inst_data[1],
+                        exchange=ExchangeType.DCE, time=day, defaults={
+                            'expire_date': inst_data[1],
+                            'open': inst_data[2].replace(',', '') if inst_data[2] != '-' else
+                            inst_data[5].replace(',', ''),
+                            'high': inst_data[3].replace(',', '') if inst_data[3] != '-' else
+                            inst_data[5].replace(',', ''),
+                            'low': inst_data[4].replace(',', '') if inst_data[4] != '-' else
+                            inst_data[5].replace(',', ''),
+                            'close': inst_data[5].replace(',', ''),
+                            'settlement': inst_data[7].replace(',', '') if inst_data[7] != '-' else
+                            inst_data[6].replace(',', ''),
+                            'volume': inst_data[10].replace(',', ''),
+                            'open_interest': inst_data[11].replace(',', '')})
+    except Exception as e:
+        print('update_from_dce failed: ' % e)
 
 
 async def update_from_cffex(day: datetime.datetime):
-    async with aiohttp.ClientSession() as session:
-        await max_conn_cffex.acquire()
-        async with session.get('http://{}/fzjy/mrhq/{}/index.xml'.format(
-                cffex_ip, day.strftime('%Y%m/%d'))) as response:
-            rst = await response.text()
-            max_conn_cffex.release()
-            tree = ET.fromstring(rst)
-            for inst_data in tree.getchildren():
-                """
-                <dailydata>
-                <instrumentid>IC1609</instrumentid>
-                <tradingday>20160824</tradingday>
-                <openprice>6336.8</openprice>
-                <highestprice>6364.4</highestprice>
-                <lowestprice>6295.6</lowestprice>
-                <closeprice>6314.2</closeprice>
-                <openinterest>24703.0</openinterest>
-                <presettlementprice>6296.6</presettlementprice>
-                <settlementpriceIF>6317.6</settlementpriceIF>
-                <settlementprice>6317.6</settlementprice>
-                <volume>10619</volume>
-                <turnover>1.3440868E10</turnover>
-                <productid>IC</productid>
-                <delta/>
-                <segma/>
-                <expiredate>20160919</expiredate>
-                </dailydata>
-                """
-                # error_data = list(inst_data.itertext())
-                DailyBar.objects.update_or_create(
-                    code=inst_data.findtext('instrumentid').strip(),
-                    exchange=ExchangeType.CFFEX, time=day, defaults={
-                        'expire_date': inst_data.findtext('expiredate')[2:6],
-                        'open': inst_data.findtext('openprice').replace(',', '') if inst_data.findtext(
-                            'openprice') else inst_data.findtext('closeprice').replace(',', ''),
-                        'high': inst_data.findtext('highestprice').replace(',', '') if inst_data.findtext(
-                            'highestprice') else inst_data.findtext('closeprice').replace(',', ''),
-                        'low': inst_data.findtext('lowestprice').replace(',', '') if inst_data.findtext(
-                            'lowestprice') else inst_data.findtext('closeprice').replace(',', ''),
-                        'close': inst_data.findtext('closeprice').replace(',', ''),
-                        'settlement': inst_data.findtext('settlementprice').replace(',', '')
-                        if inst_data.findtext('settlementprice') else
-                        inst_data.findtext('presettlementprice').replace(',', ''),
-                        'volume': inst_data.findtext('volume').replace(',', ''),
-                        'open_interest': inst_data.findtext('openinterest').replace(',', '')})
+    try:
+        async with aiohttp.ClientSession() as session:
+            await max_conn_cffex.acquire()
+            async with session.get('http://{}/fzjy/mrhq/{}/index.xml'.format(
+                    cffex_ip, day.strftime('%Y%m/%d'))) as response:
+                rst = await response.text()
+                max_conn_cffex.release()
+                tree = ET.fromstring(rst)
+                for inst_data in tree.getchildren():
+                    """
+                    <dailydata>
+                    <instrumentid>IC1609</instrumentid>
+                    <tradingday>20160824</tradingday>
+                    <openprice>6336.8</openprice>
+                    <highestprice>6364.4</highestprice>
+                    <lowestprice>6295.6</lowestprice>
+                    <closeprice>6314.2</closeprice>
+                    <openinterest>24703.0</openinterest>
+                    <presettlementprice>6296.6</presettlementprice>
+                    <settlementpriceIF>6317.6</settlementpriceIF>
+                    <settlementprice>6317.6</settlementprice>
+                    <volume>10619</volume>
+                    <turnover>1.3440868E10</turnover>
+                    <productid>IC</productid>
+                    <delta/>
+                    <segma/>
+                    <expiredate>20160919</expiredate>
+                    </dailydata>
+                    """
+                    # error_data = list(inst_data.itertext())
+                    DailyBar.objects.update_or_create(
+                        code=inst_data.findtext('instrumentid').strip(),
+                        exchange=ExchangeType.CFFEX, time=day, defaults={
+                            'expire_date': inst_data.findtext('expiredate')[2:6],
+                            'open': inst_data.findtext('openprice').replace(',', '') if inst_data.findtext(
+                                'openprice') else inst_data.findtext('closeprice').replace(',', ''),
+                            'high': inst_data.findtext('highestprice').replace(',', '') if inst_data.findtext(
+                                'highestprice') else inst_data.findtext('closeprice').replace(',', ''),
+                            'low': inst_data.findtext('lowestprice').replace(',', '') if inst_data.findtext(
+                                'lowestprice') else inst_data.findtext('closeprice').replace(',', ''),
+                            'close': inst_data.findtext('closeprice').replace(',', ''),
+                            'settlement': inst_data.findtext('settlementprice').replace(',', '')
+                            if inst_data.findtext('settlementprice') else
+                            inst_data.findtext('presettlementprice').replace(',', ''),
+                            'volume': inst_data.findtext('volume').replace(',', ''),
+                            'open_interest': inst_data.findtext('openinterest').replace(',', '')})
+    except Exception as e:
+        print('update_from_cffex failed: ' % e)
 
 
 def store_main_bar(bar: DailyBar):
@@ -462,6 +483,10 @@ def fetch_from_quandl_all():
         fetch_from_quandl(inst)
 
 
+def calc_sma(close, period):
+    return reduce(lambda x, y: ((period - 1) * x + y) / period, close)
+
+
 def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
     his_break_n = strategy.param_set.get(code='BreakPeriod').int_value
     his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
@@ -474,13 +499,18 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
         'time', 'open', 'high', 'low', 'close', 'settlement'))
     df.index = pd.DatetimeIndex(df.time)
     df['atr'] = ATR(df, timeperiod=his_atr_n)
-    df['short_trend'] = SMA(df, timeperiod=his_short_n)
-    df['long_trend'] = SMA(df, timeperiod=his_long_n)
+    df['short_trend'] = df.close
+    df['long_trend'] = df.close
+    for idx in range(1, df.shape[0]):
+        df.ix[idx, 'short_trend'] = (df.ix[idx-1, 'short_trend'] * (his_short_n - 1) +
+                                     df.ix[idx, 'close']) / his_short_n
+        df.ix[idx, 'long_trend'] = (df.ix[idx-1, 'long_trend'] * (his_long_n - 1) +
+                                    df.ix[idx, 'close']) / his_long_n
     df['high_line'] = df.close.rolling(window=his_break_n).max()
     df['low_line'] = df.close.rolling(window=his_break_n).min()
     cur_pos = 0
     last_trade = None
-    for cur_idx in range(his_long_n, df.shape[0]):
+    for cur_idx in range(his_break_n+1, df.shape[0]):
         idx = cur_idx - 1
         cur_date = df.index[cur_idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
         prev_date = df.index[idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
@@ -491,7 +521,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 Signal.objects.create(
                     code=new_bar.code, trigger_value=df.atr[idx],
                     strategy=strategy, instrument=inst, type=SignalType.BUY, processed=True,
-                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                    trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
                 last_trade = Trade.objects.create(
                     broker=strategy.broker, strategy=strategy, instrument=inst,
                     code=new_bar.code, direction=DirectionType.LONG,
@@ -504,7 +534,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 Signal.objects.create(
                     code=new_bar.code, trigger_value=df.atr[idx],
                     strategy=strategy, instrument=inst, type=SignalType.SELL_SHORT, processed=True,
-                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                    trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
                 last_trade = Trade.objects.create(
                     broker=strategy.broker, strategy=strategy, instrument=inst,
                     code=new_bar.code, direction=DirectionType.SHORT,
@@ -515,14 +545,14 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 exchange=inst.exchange, product_code=inst.product_code,
                 time__gte=last_trade.open_time,
                 time__lt=prev_date).aggregate(Max('high'))['high__max'])
-            if df.close[idx] <= hh - df.atr[cur_pos] * his_stop_n:
+            if df.close[idx] <= hh - df.atr[cur_pos-1] * his_stop_n:
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
                 Signal.objects.create(
                     strategy=strategy, instrument=inst, type=SignalType.SELL, processed=True,
                     code=new_bar.code,
-                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                    trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
                 last_trade.avg_exit_price = new_bar.open
                 last_trade.close_time = cur_date
                 last_trade.closed_shares = 1
@@ -534,27 +564,45 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 exchange=inst.exchange, product_code=inst.product_code,
                 time__gte=last_trade.open_time,
                 time__lt=prev_date).aggregate(Min('low'))['low__min'])
-            if df.close[idx] >= ll - df.atr[cur_pos * -1] * his_stop_n:
+            if df.close[idx] >= ll + df.atr[cur_pos * -1-1] * his_stop_n:
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
                 Signal.objects.create(
                     code=new_bar.code,
                     strategy=strategy, instrument=inst, type=SignalType.BUY_COVER, processed=True,
-                    trigger_time=cur_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
+                    trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
                 last_trade.avg_exit_price = new_bar.open
                 last_trade.close_time = cur_date
                 last_trade.closed_shares = 1
                 last_trade.profit = (last_trade.avg_entry_price - new_bar.open) * inst.volume_multiple
                 last_trade.save()
                 cur_pos = 0
+        if cur_pos != 0 and cur_date.date() == day.date():
+            last_trade.avg_exit_price = df.open[cur_idx]
+            last_trade.close_time = cur_date
+            last_trade.closed_shares = 1
+            if last_trade.direction == DirectionType.LONG:
+                last_trade.profit = (last_trade.avg_entry_price - Decimal(df.open[cur_idx])) * \
+                                    inst.volume_multiple
+            else:
+                last_trade.profit = (Decimal(df.open[cur_idx]) - last_trade.avg_entry_price) * \
+                                    inst.volume_multiple
+            last_trade.save()
 
 
 def calc_his_all(day: datetime.datetime):
     strategy = Strategy.objects.get(name='大哥2.0')
     for inst in strategy.instruments.all():
         print('process', inst)
-        calc_history_signal(inst, day, strategy)
+        last_day = Trade.objects.filter(instrument=inst, close_time__isnull=True).values_list(
+            'open_time', flat=True).first()
+        if last_day is None:
+            last_day = datetime.datetime.combine(
+                MainBar.objects.filter(product_code=inst.product_code, time__lte=day).order_by(
+                    '-time').values_list('time', flat=True).first(),
+                datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))
+        calc_history_signal(inst, last_day, strategy)
 
 
 def calc_his_up_limit(inst: Instrument, bar: DailyBar):
@@ -617,18 +665,3 @@ def load_kt_data(directory: str = '/Users/jeffchen/kt_data/'):
             MainBar.objects.bulk_create(insert_list)
             Instrument.objects.filter(product_code=code).update(
                 last_main=last_main, main_code=cur_main, change_time=change_time)
-
-
-def to_df(queryset):
-    """
-    :param queryset: django.db.models.query.QuerySet
-    :return: pandas.core.frame.DataFrame
-    """
-    try:
-        query, params = queryset.query.sql_with_params()
-    except EmptyResultSet:
-        # Occurs when Django tries to create an expression for a
-        # query which will certainly be empty
-        # e.g. Book.objects.filter(author__in=[])
-        return pd.DataFrame()
-    return pd.io.sql.read_sql_query(query, connection, params=params)
