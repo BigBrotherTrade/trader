@@ -23,7 +23,7 @@ from decimal import Decimal
 
 from django.db.models import Q, Max, Min, Sum
 import numpy as np
-import talib
+from talib.abstract import ATR
 import ujson as json
 import aioredis
 
@@ -128,7 +128,6 @@ class TradeStrategy(BaseModule):
             else:
                 profit = Decimal(pos['OpenPrice']) - Decimal(tick['LastPrice'])
             profit = profit * Decimal(pos['Volume']) * inst.volume_multiple
-            print(inst, profit)
             Trade.objects.update_or_create(
                 broker=self.__broker, strategy=self.__strategy, instrument=inst,
                 code=pos['InstrumentID'],
@@ -162,7 +161,7 @@ class TradeStrategy(BaseModule):
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
         # await self.collect_tick_stop()
-        # await self.collect_quote()
+        await self.collect_quote()
         # day = datetime.datetime.strptime('20160905', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
         # for inst in self.__strategy.instruments.all():
         #   self.calc_signal(inst, day)
@@ -801,39 +800,42 @@ class TradeStrategy(BaseModule):
         try:
             if inst.product_code not in self.__inst_ids:
                 return
-            break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value + 1
+            break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
             atr_n = self.__strategy.param_set.get(code='AtrPeriod').int_value
             long_n = self.__strategy.param_set.get(code='LongPeriod').int_value
             short_n = self.__strategy.param_set.get(code='ShortPeriod').int_value
             stop_n = self.__strategy.param_set.get(code='StopLoss').int_value
             risk = self.__strategy.param_set.get(code='Risk').float_value
-            last_bars = MainBar.objects.filter(
-                exchange=inst.exchange, product_code=inst.product_code, time__lte=day.date()
-            ).order_by('time').values_list('open', 'high', 'low', 'close')
-            arr = np.array(last_bars, dtype=float)
-            close = arr[-1, 3]
-            atr_s = talib.ATR(arr[:, 1], arr[:, 2], arr[:, 3], timeperiod=atr_n)
-            atr = atr_s[-1]
-            short_trend = talib.SMA(arr[:, 3], timeperiod=short_n)[-1]
-            long_trend = talib.SMA(arr[:, 3], timeperiod=long_n)[-1]
-            high_line = np.amax(arr[-break_n:-1, 3])
-            low_line = np.amin(arr[-break_n:-1, 3])
-            buy_sig = short_trend > long_trend and close > high_line
-            sell_sig = short_trend < long_trend and close < low_line
-            # 查询该品种目前持有的仓位, 条件是开仓时间<=今天, 尚未平仓或今天以后平仓(回测用)
+            df = to_df(MainBar.objects.filter(
+                time__lte=day.date(),
+                exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
+                'time', 'open', 'high', 'low', 'close', 'settlement'))
+            df.index = pd.DatetimeIndex(df.time)
+            df['atr'] = ATR(df, timeperiod=atr_n)
+            df['short_trend'] = df.close
+            df['long_trend'] = df.close
+            for idx in range(1, df.shape[0]):
+                df.ix[idx, 'short_trend'] = (df.ix[idx - 1, 'short_trend'] * (short_n - 1) +
+                                             df.ix[idx, 'close']) / short_n
+                df.ix[idx, 'long_trend'] = (df.ix[idx - 1, 'long_trend'] * (long_n - 1) +
+                                            df.ix[idx, 'close']) / long_n
+            df['high_line'] = df.close.rolling(window=break_n).max()
+            df['low_line'] = df.close.rolling(window=break_n).min()
+            idx = -1
+            pos_idx = None
+            buy_sig = df.short_trend[idx] > df.long_trend[idx] and df.close[idx] > df.high_line[idx - 1]
+            sell_sig = df.short_trend[idx] < df.long_trend[idx] and df.close[idx] < df.low_line[idx - 1]
             pos = Trade.objects.filter(
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
                 instrument=inst, shares__gt=0, open_time__lt=day).first()
             roll_over = False
-            open_count = 1
             if pos is not None:
+                pos_idx = df.index.get_loc(
+                    pos.open_time.astimezone(pytz.FixedOffset(480)).date().isoformat())
                 roll_over = pos.code != inst.main_code
-                open_count = MainBar.objects.filter(
-                    exchange=inst.exchange, product_code=inst.product_code,
-                    time__gte=pos.open_time.date(), time__lte=day.date()).count()
             elif self.__strategy.force_opens.filter(id=inst.id).exists() and not buy_sig and not sell_sig:
                     logger.info('强制开仓: %s', inst)
-                    if short_trend > long_trend:
+                    if df.short_trend[idx] > df.long_trend[idx]:
                         buy_sig = True
                     else:
                         sell_sig = True
@@ -849,10 +851,10 @@ class TradeStrategy(BaseModule):
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
                         time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
                     # 多头止损
-                    if close <= hh - atr_s[-open_count] * stop_n:
+                    if df.close[idx] <= hh - df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.SELL
                         # 止损时 signal_value 为止损价
-                        signal_value = hh - atr_s[-open_count] * stop_n
+                        signal_value = hh - df.atr[pos_idx - 1] * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
@@ -879,9 +881,9 @@ class TradeStrategy(BaseModule):
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
                         time__gte=pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
                     # 空头止损
-                    if close >= ll + atr_s[-open_count] * stop_n:
+                    if df.close[idx] >= ll + df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.BUY_COVER
-                        signal_value = ll + atr_s[-open_count] * stop_n
+                        signal_value = ll + df.atr[pos_idx - 1] * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
@@ -903,19 +905,19 @@ class TradeStrategy(BaseModule):
                                 'priority': PriorityType.Normal, 'processed': False})
             # 做多
             elif buy_sig:
-                volume = self.__current * risk // (Decimal(atr) * Decimal(inst.volume_multiple))
+                volume = self.__current * risk // (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
                 if volume > 0:
                     signal = SignalType.BUY
-                    signal_value = high_line
+                    signal_value = df.high_line[idx - 1]
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     price = self.calc_up_limit(inst, new_bar)
             # 做空
             elif sell_sig:
-                volume = self.__current * risk // (Decimal(atr) * Decimal(inst.volume_multiple))
+                volume = self.__current * risk // (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
                 if volume > 0:
                     signal = SignalType.SELL_SHORT
-                    signal_value = low_line
+                    signal_value = df.low_line[idx - 1]
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     price = self.calc_down_limit(inst, new_bar)
