@@ -13,9 +13,28 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+import pandas as pd
+from pandas.io.sql import read_sql_query
 from django.db import models
+from django.db import connection
+from django.db.models.sql import EmptyResultSet
 
 from .const import *
+
+
+def to_df(queryset):
+    """
+    :param queryset: django.db.models.query.QuerySet
+    :return: pandas.core.frame.DataFrame
+    """
+    try:
+        query, params = queryset.query.sql_with_params()
+    except EmptyResultSet:
+        # Occurs when Django tries to create an expression for a
+        # query which will certainly be empty
+        # e.g. Book.objects.filter(author__in=[])
+        return pd.DataFrame()
+    return read_sql_query(query, connection, params=params)
 
 
 class Address(models.Model):
