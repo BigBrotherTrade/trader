@@ -49,7 +49,7 @@ level = INFO
 format = %(asctime)s %(name)s [%(levelname)s] %(message)s
 """
 
-app_dir = AppDirs('trader', False, version=app_ver)
+app_dir = AppDirs('trader')
 config_file = os.path.join(app_dir.user_config_dir, 'config.ini')
 if not os.path.exists(config_file):
     if not os.path.exists(app_dir.user_config_dir):

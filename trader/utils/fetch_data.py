@@ -65,4 +65,4 @@ async def fetch_bar2():
 # fetch_from_quandl_all()
 # clean_dailybar()
 # load_kt_data()
-# calc_his_all(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
+calc_his_all(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
