@@ -10,9 +10,10 @@ INSTALL
 先装talib的C库，再用pip装依赖。
 
 修改 mysql 配置文件 /etc/my.cnf.d/server.cnf ，增加如下配置:
-[mysqld]
-wait_timeout=86400
-interactive_timeout=86400
+
+    [mysqld]
+    wait_timeout=86400
+    interactive_timeout=86400
 
 重启mysql服务
 
