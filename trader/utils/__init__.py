@@ -483,8 +483,20 @@ def fetch_from_quandl_all():
         fetch_from_quandl(inst)
 
 
-def calc_sma(close, period):
-    return reduce(lambda x, y: ((period - 1) * x + y) / period, close)
+def calc_sma(price, period):
+    return reduce(lambda x, y: ((period - 1) * x + y) / period, price)
+
+
+def calc_corr(day: datetime.datetime):
+    price_dict = dict()
+    begin_day = day.replace(year=day.year - 1)
+    for inst in Strategy.objects.get(name='大哥2.0').instruments.all():
+        price_dict[inst.product_code] = to_df(MainBar.objects.filter(
+            time__gte=begin_day.date(), exchange=inst.exchange,
+            product_code=inst.product_code).order_by('time').values_list('time', 'close'))
+        price_dict[inst.product_code].index = pd.DatetimeIndex(price_dict[inst.product_code].time)
+        price_dict[inst.product_code]['price'] = price_dict[inst.product_code].close.pct_change()
+    return pd.DataFrame({k: v.price for k, v in price_dict.items()}).corr()
 
 
 def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
