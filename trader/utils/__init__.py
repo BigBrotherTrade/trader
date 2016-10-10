@@ -21,6 +21,7 @@ import xml.etree.ElementTree as ET
 import asyncio
 import os
 from functools import reduce
+from itertools import combinations
 
 import pytz
 from bs4 import BeautifulSoup
@@ -489,14 +490,37 @@ def calc_sma(price, period):
 
 def calc_corr(day: datetime.datetime):
     price_dict = dict()
-    begin_day = day.replace(year=day.year - 1)
-    for inst in Strategy.objects.get(name='大哥2.0').instruments.all():
-        price_dict[inst.product_code] = to_df(MainBar.objects.filter(
-            time__gte=begin_day.date(), exchange=inst.exchange,
-            product_code=inst.product_code).order_by('time').values_list('time', 'close'))
-        price_dict[inst.product_code].index = pd.DatetimeIndex(price_dict[inst.product_code].time)
-        price_dict[inst.product_code]['price'] = price_dict[inst.product_code].close.pct_change()
+    begin_day = day.replace(year=day.year - 3)
+    for code in Strategy.objects.get(name='大哥2.0').instruments.all().order_by('id').values_list(
+            'product_code', flat=True):
+        price_dict[code] = to_df(MainBar.objects.filter(
+            time__gte=begin_day.date(),
+            product_code=code).order_by('time').values_list('time', 'close'))
+        price_dict[code].index = pd.DatetimeIndex(price_dict[code].time)
+        price_dict[code]['price'] = price_dict[code].close.pct_change()
     return pd.DataFrame({k: v.price for k, v in price_dict.items()}).corr()
+
+
+def nCr(n, r):
+    f = math.factorial
+    return f(n) / f(r) / f(n-r)
+
+
+def find_best_score(n: int=20):
+    """
+    一秒钟算5个组合，要算100年..
+    """
+    corr_matrix = calc_corr(datetime.datetime.today())
+    code_list = Strategy.objects.get(name='大哥2.0').instruments.all().order_by('id').values_list(
+        'product_code', flat=True)
+    result = list()
+    for code_list in tqdm(combinations(code_list, n), total=nCr(code_list.count(), n)):
+        score_df = pd.DataFrame([corr_matrix.ix[i, j] for i, j in combinations(code_list, 2)])
+        score = (round((1 - (score_df.abs() ** 2).mean()[0]) * 100, 3) - 50) * 2
+        result.append((score, ','.join(code_list)))
+    result.sort(key=lambda tup: tup[0])
+    print('得分最高: ', result[-3:])
+    print('得分最低: ', result[:3])
 
 
 def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):

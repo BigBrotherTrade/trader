@@ -29,6 +29,14 @@ class ExchangeType(DjangoChoices):
     CFFEX = C(value='CFFEX', label='中金所')
 
 
+class SectionType(DjangoChoices):
+    AgriculturalCommodities = C(value='AgriculturalCommodities', label='农产品')
+    NonAgriculturalCommodities = C(value='NonAgriculturalCommodities', label='工业品')
+    Equities = C(value='Equities', label='股指')
+    Rates = C(value='Rates', label='利率')
+    Currencies = C(value='Currencies', label='货币')
+
+
 class AddressType(DjangoChoices):
     TRADE = C(label='交易')
     MARKET = C(label='行情')
