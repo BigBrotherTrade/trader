@@ -703,6 +703,8 @@ class TradeStrategy(BaseModule):
             await asyncio.wait(tasks)
             for inst_obj in Instrument.objects.all():
                 logger.info('计算连续合约, 交易信号: %s', inst_obj.name)
+                if inst_obj.name == 'ZC':
+                    continue
                 calc_main_inst(inst_obj, day)
                 self.calc_signal(inst_obj, day)
         except Exception as e:
