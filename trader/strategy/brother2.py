@@ -642,6 +642,11 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='20 15 * * *')
     async def refresh_instrument(self):
+        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
+        _, trading = await is_trading_day(day)
+        if not trading:
+            logger.info('今日是非交易日, 不更新任何数据。')
+            return
         logger.info('更新账户')
         await self.query('TradingAccount')
         logger.info('更新持仓')
