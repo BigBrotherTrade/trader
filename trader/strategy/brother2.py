@@ -46,6 +46,7 @@ class TradeStrategy(BaseModule):
     __order_ref = random.randint(0, 999)
     __inst_ids = list()
     __instruments = defaultdict(dict)
+    __fake = 0  # 虚拟资金
     __current = 0  # 当前动态权益
     __pre_balance = 0  # 静态权益
     __cash = 0  # 可用资金
@@ -86,12 +87,13 @@ class TradeStrategy(BaseModule):
         self.__cash = Decimal(account['Available'])
         self.__cur_account = account
         self.__broker = Broker.objects.get(username=account['AccountID'])
+        self.__fake = self.__broker.fake
         self.__broker.cash = self.__cash
         self.__broker.current = self.__current
         self.__broker.pre_balance = self.__pre_balance
         self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
         logger.info("可用资金: {:,.0f} 静态权益: {:,.0f} 动态权益: {:,.0f}".format(self.__cash, self.__pre_balance, self.__current))
-        self.__strategy = self.__broker.strategy_set.get(name='大哥2.0')
+        self.__strategy = self.__broker.strategy_set.first()
         self.__inst_ids = [inst.product_code for inst in self.__strategy.instruments.all()]
 
     def calc_fee(self, trade: dict):
@@ -916,7 +918,8 @@ class TradeStrategy(BaseModule):
                                 'priority': PriorityType.Normal, 'processed': False})
             # 做多
             elif buy_sig:
-                volume = self.__current * risk // (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
+                volume = (self.__current + self.__fake) * risk // \
+                         (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
                 if volume > 0:
                     signal = SignalType.BUY
                     signal_value = df.high_line[idx - 1]
@@ -925,7 +928,8 @@ class TradeStrategy(BaseModule):
                     price = self.calc_up_limit(inst, new_bar)
             # 做空
             elif sell_sig:
-                volume = self.__current * risk // (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
+                volume = (self.__current + self.__fake) * risk // \
+                         (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
                 if volume > 0:
                     signal = SignalType.SELL_SHORT
                     signal_value = df.low_line[idx - 1]

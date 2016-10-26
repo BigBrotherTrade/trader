@@ -60,6 +60,7 @@ class Broker(models.Model):
     identify = models.CharField(verbose_name='唯一标志', max_length=32)
     username = models.CharField(verbose_name='用户名', max_length=32)
     password = models.CharField(verbose_name='密码', max_length=32)
+    fake = models.DecimalField(verbose_name='虚拟资金', null=True, max_digits=12, decimal_places=2)
     cash = models.DecimalField(verbose_name='可用资金', null=True, max_digits=12, decimal_places=2)
     current = models.DecimalField(verbose_name='动态权益', null=True, max_digits=12, decimal_places=2)
     pre_balance = models.DecimalField(verbose_name='静态权益', null=True, max_digits=12, decimal_places=2)
