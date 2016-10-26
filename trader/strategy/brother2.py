@@ -22,7 +22,6 @@ import pytz
 from decimal import Decimal
 
 from django.db.models import Q, Max, Min, Sum
-import numpy as np
 from talib.abstract import ATR
 import ujson as json
 import aioredis
@@ -600,6 +599,10 @@ class TradeStrategy(BaseModule):
                 self.process_signal(inst)
         except Exception as ee:
             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
+
+    @param_function(crontab='*/1 * * * *')
+    async def heartbeat(self):
+        self.redis_client.set('HEARTBEAT:TRADER', 1, ex=61)
 
     @param_function(crontab='1 9 * * *')
     async def check_signal_processed1(self):
