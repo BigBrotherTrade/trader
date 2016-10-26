@@ -156,6 +156,7 @@ class TradeStrategy(BaseModule):
                 cb.set_result(msg_list)
 
     async def start(self):
+        self.redis_client.set('HEARTBEAT:TRADER', 1, ex=61)
         await self.query('TradingAccount')
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
