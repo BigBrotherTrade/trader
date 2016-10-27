@@ -524,7 +524,7 @@ class TradeStrategy(BaseModule):
                         last_trade.avg_exit_price = Decimal(0)
                     last_trade.avg_exit_price = \
                         (last_trade.avg_exit_price * last_trade.closed_shares +
-                         trade['Volume'] * trade['Price']) / (last_trade.closed_shares + trade['Volume'])
+                         trade['Volume'] * Decimal(trade['Price'])) / (last_trade.closed_shares + trade['Volume'])
                     last_trade.closed_shares += trade['Volume']
                     last_trade.cost += \
                         trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * \
