@@ -175,7 +175,10 @@ class TradeStrategy(BaseModule):
         #                         order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
         #             self.__activeOrders[order['OrderRef']] = order
         #     logger.info("未成交订单: %s", self.__activeOrders)
-        # await self.SubscribeMarketData(self.__inst_ids)
+        # inst_set = list()
+        # for inst in Instrument.objects.all():
+        #     inst_set += inst.all_inst.split(',')
+        # await self.SubscribeMarketData(inst_set)
 
     async def stop(self):
         pass
@@ -569,6 +572,8 @@ class TradeStrategy(BaseModule):
 
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRspQryInvestorPositionDetail:*')
     async def OnRspQryInvestorPositionDetail(self, _, pos: dict):
+        if 'empty' in pos and pos['empty'] is True:
+            return
         if pos['Volume'] > 0:
             old_pos = self.__shares.get(pos['InstrumentID'])
             if old_pos is None:
@@ -605,7 +610,7 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='*/1 * * * *')
     async def heartbeat(self):
-        self.redis_client.set('HEARTBEAT:TRADER', 1, ex=61)
+        self.redis_client.set('HEARTBEAT:TRADER', 1, ex=301)
 
     @param_function(crontab='1 9 * * *')
     async def check_signal_processed1(self):
@@ -840,6 +845,7 @@ class TradeStrategy(BaseModule):
             sell_sig = df.short_trend[idx] < df.long_trend[idx] and df.close[idx] < df.low_line[idx - 1]
             pos = Trade.objects.filter(
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
+                broker=self.__broker, strategy=self.__strategy,
                 instrument=inst, shares__gt=0, open_time__lt=day).first()
             roll_over = False
             if pos is not None:
@@ -971,6 +977,7 @@ class TradeStrategy(BaseModule):
                 self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
             elif signal.type == SignalType.BUY_COVER:
                 pos = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy,
                     code=signal.code, close_time__isnull=True, direction=DirectionType.SHORT,
                     instrument=inst, shares__gt=0).first()
                 if use_tick:
@@ -980,6 +987,7 @@ class TradeStrategy(BaseModule):
                 self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
             elif signal.type == SignalType.SELL:
                 pos = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy,
                     code=signal.code, close_time__isnull=True, direction=DirectionType.LONG,
                     instrument=inst, shares__gt=0).first()
                 if use_tick:
@@ -989,6 +997,7 @@ class TradeStrategy(BaseModule):
                 self.io_loop.create_task(self.sell(pos, price, signal.volume))
             elif signal.type == SignalType.ROLL_CLOSE:
                 pos = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy,
                     code=signal.code, close_time__isnull=True, instrument=inst, shares__gt=0).first()
                 if pos.direction == DirectionType.LONG:
                     if use_tick:
@@ -1005,6 +1014,7 @@ class TradeStrategy(BaseModule):
             elif signal.type == SignalType.ROLL_OPEN:
                 pos = Trade.objects.filter(
                     Q(close_time__isnull=True) | Q(close_time__startswith=datetime.date.today()),
+                    broker=self.__broker, strategy=self.__strategy,
                     shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
                 if pos.direction == DirectionType.LONG:
                     if use_tick:
