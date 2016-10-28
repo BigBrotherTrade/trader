@@ -164,9 +164,9 @@ class TradeStrategy(BaseModule):
         await self.query('InvestorPositionDetail')
         # await self.collect_tick_stop()
         # await self.collect_quote()
-        # day = datetime.datetime.strptime('20160905', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
-        # for inst in self.__strategy.instruments.all():
-        #   self.calc_signal(inst, day)
+        day = datetime.datetime.strptime('20161028', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+        for inst in self.__strategy.instruments.all():
+            self.calc_signal(inst, day)
         #   self.process_signal(inst)
         # order_list = await self.query('Order')
         # if order_list:
