@@ -140,7 +140,7 @@ class TradeStrategy(BaseModule):
                     'shares': pos['Volume'], 'filled_shares': pos['Volume'],
                     'avg_entry_price': Decimal(pos['OpenPrice']),
                     'cost': pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money *
-                            inst.volume_multiple + pos['Volume'] * inst.fee_volume,
+                    inst.volume_multiple + pos['Volume'] * inst.fee_volume,
                     'profit': profit, 'frozen_margin': Decimal(pos['Margin'])})
 
     @staticmethod
@@ -477,31 +477,28 @@ class TradeStrategy(BaseModule):
             inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', trade['InstrumentID'])[0])
             order = Order.objects.filter(order_ref=order_ref).first()
             if trade['OffsetFlag'] == ApiStruct.OF_Open:
-                last_trade, created = Trade.objects.update_or_create(
+                last_trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst,
                     code=trade['InstrumentID'],
                     open_time__startswith='{}-{}-{}'.format(
                         trade['TradingDay'][0:4], trade['TradingDay'][4:6], trade['TradingDay'][6:8]),
                     direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Buy
-                    else DirectionType.SHORT, close_time__isnull=True, defaults={
-                        'open_order': order,
-                        'open_time': datetime.datetime.strptime(
+                    else DirectionType.SHORT, close_time__isnull=True).first()
+                if last_trade is None:
+                    last_trade = Trade.objects.create(
+                        broker=self.__broker, strategy=self.__strategy, instrument=inst,
+                        code=trade['InstrumentID'], open_order=order,
+                        direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Buy
+                        else DirectionType.SHORT,
+                        open_time=datetime.datetime.strptime(
                             trade['TradeDate']+trade['TradeTime'], '%Y%m%d%H:%M:%S').replace(
-                            tzinfo=pytz.FixedOffset(480))})
-                if created:
-                    last_trade.filled_shares = trade['Volume']
-                    last_trade.shares = order.volume if order is not None else trade['Volume']
-                    last_trade.avg_entry_price = trade['Price']
-                    last_trade.cost = \
-                        trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * \
-                        inst.volume_multiple + trade['Volume'] * inst.fee_volume
-                    last_trade.frozen_margin = trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
+                            tzinfo=pytz.FixedOffset(480)),
+                        shares=order.volume if order is not None else trade['Volume'],
+                        filled_shares=trade['Volume'], avg_entry_price=trade['Price'],
+                        cost=trade['Volume'] * Decimal(trade['Price']) * inst.fee_money *
+                        inst.volume_multiple + trade['Volume'] * inst.fee_volume,
+                        frozen_margin=trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate)
                 else:
-                    if last_trade is not None:
-                        if last_trade.filled_shares is None:
-                            last_trade.filled_shares = 0
-                        if last_trade.avg_entry_price is None:
-                            last_trade.avg_entry_price = Decimal(0)
                     last_trade.avg_entry_price = \
                         (last_trade.avg_entry_price * last_trade.filled_shares + trade['Volume'] *
                          trade['Price']) / (last_trade.filled_shares + trade['Volume'])
@@ -510,7 +507,7 @@ class TradeStrategy(BaseModule):
                         trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * \
                         inst.volume_multiple + trade['Volume'] * inst.fee_volume
                     last_trade.frozen_margin += trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
-                last_trade.save()
+                    last_trade.save()
                 signal = Signal.objects.filter(
                     Q(type=SignalType.BUY if trade['Direction'] == ApiStruct.D_Buy
                         else SignalType.SELL_SHORT) | Q(type=SignalType.ROLL_OPEN),
@@ -529,7 +526,8 @@ class TradeStrategy(BaseModule):
                         last_trade.avg_exit_price = Decimal(0)
                     last_trade.avg_exit_price = \
                         (last_trade.avg_exit_price * last_trade.closed_shares +
-                         trade['Volume'] * Decimal(trade['Price'])) / (last_trade.closed_shares + trade['Volume'])
+                         trade['Volume'] * Decimal(trade['Price'])) / \
+                        (last_trade.closed_shares + trade['Volume'])
                     last_trade.closed_shares += trade['Volume']
                     last_trade.cost += \
                         trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * \
