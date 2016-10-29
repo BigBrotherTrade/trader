@@ -380,15 +380,17 @@ class TradeStrategy(BaseModule):
             kwargs['OrderRef'] = order_ref
             channel_name1 = self.__trade_response_format.format('OnRtnOrder', order_ref)
             channel_name2 = self.__trade_response_format.format('OnRspError', request_id)
-            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
+            channel_name3 = self.__trade_response_format.format('OnRspOrderInsert', 0)
+            ch1, ch2, ch3 = await sub_client.psubscribe(channel_name1, channel_name2, channel_name3)
             cb = self.io_loop.create_future()
             tasks = [
                 asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
                 asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
+                asyncio.ensure_future(self.query_reader(ch3, cb), loop=self.io_loop),
             ]
             self.redis_client.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(kwargs))
             rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
-            await sub_client.punsubscribe(channel_name1, channel_name2)
+            await sub_client.punsubscribe(channel_name1, channel_name2, channel_name3)
             sub_client.close()
             await asyncio.wait(tasks, loop=self.io_loop)
             return rst
