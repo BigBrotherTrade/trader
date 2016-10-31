@@ -164,10 +164,10 @@ class TradeStrategy(BaseModule):
         await self.query('InvestorPositionDetail')
         # await self.collect_tick_stop()
         # await self.collect_quote()
-        # day = datetime.datetime.strptime('20161028', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+        # day = datetime.datetime.strptime('20161031', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
         # for inst in self.__strategy.instruments.all():
-        #     self.calc_signal(inst, day)
-        #   self.process_signal(inst)
+        #     # self.calc_signal(inst, day)
+        #     self.process_signal(inst)
         # order_list = await self.query('Order')
         # if order_list:
         #     for order in order_list:
@@ -591,29 +591,42 @@ class TradeStrategy(BaseModule):
     async def OnRspQryTradingAccount(self, _, account: dict):
         self.update_account(account)
 
-    @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnInstrumentStatus:*')
-    async def OnRtnInstrumentStatus(self, channel, status: dict):
-        """
-{"EnterReason":"1","EnterTime":"10:30:00","ExchangeID":"SHFE","ExchangeInstID":"ru","InstrumentID":"ru","InstrumentStatus":"2","SettlementGroupID":"00000001","TradingSegmentSN":27}
-        """
-        try:
-            product_code = channel.split(':')[-1]
-            inst = self.__strategy.instruments.filter(product_code=product_code).first()
-            if inst is None or product_code not in self.__inst_ids:
-                return
-            # logger.info('合约状态通知: %s %s', inst, status)
-            if is_auction_time(inst, status):
-                logger.info('%s 开始集合竞价, 查询待处理信号..', inst)
-                self.process_signal(inst)
-        except Exception as ee:
-            logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
+#     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnInstrumentStatus:*')
+#     async def OnRtnInstrumentStatus(self, channel, status: dict):
+#         """
+# {"EnterReason":"1","EnterTime":"10:30:00","ExchangeID":"SHFE","ExchangeInstID":"ru","InstrumentID":"ru","InstrumentStatus":"2","SettlementGroupID":"00000001","TradingSegmentSN":27}
+#         """
+#         try:
+#             product_code = channel.split(':')[-1]
+#             inst = self.__strategy.instruments.filter(product_code=product_code).first()
+#             if inst is None or product_code not in self.__inst_ids:
+#                 return
+#             # logger.info('合约状态通知: %s %s', inst, status)
+#             if is_auction_time(inst, status):
+#                 logger.info('%s 开始集合竞价, 查询待处理信号..', inst)
+#                 self.process_signal(inst)
+#         except Exception as ee:
+#             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
 
     @param_function(crontab='*/1 * * * *')
     async def heartbeat(self):
         self.redis_client.set('HEARTBEAT:TRADER', 1, ex=301)
 
+    @param_function(crontab='55 8 * * * 5')
+    async def processing_signal1(self):
+        day = datetime.datetime.today()
+        day = day.replace(tzinfo=pytz.FixedOffset(480))
+        _, trading = await is_trading_day(day)
+        if trading:
+            logger.info('查询待处理日盘信号..')
+            for sig in Signal.objects.filter(
+                    ~Q(instrument__exchange=ExchangeType.CFFEX),
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                logger.info('发现日盘信号: %s', sig)
+                self.process_signal(sig.instrument)
+
     @param_function(crontab='1 9 * * *')
-    async def check_signal_processed1(self):
+    async def check_signal1_processed(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
@@ -625,8 +638,21 @@ class TradeStrategy(BaseModule):
                 logger.info('发现遗漏信号: %s', sig)
                 self.process_signal(sig.instrument, use_tick=True)
 
+    @param_function(crontab='10 9 * * * 5')
+    async def processing_signal2(self):
+        day = datetime.datetime.today()
+        day = day.replace(tzinfo=pytz.FixedOffset(480))
+        _, trading = await is_trading_day(day)
+        if trading:
+            logger.info('查询待处理国债信号..')
+            for sig in Signal.objects.filter(
+                    instrument__exchange=ExchangeType.CFFEX,
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                logger.info('发现国债信号: %s', sig)
+                self.process_signal(sig.instrument)
+
     @param_function(crontab='16 9 * * *')
-    async def check_signal_processed2(self):
+    async def check_signal2_processed(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
@@ -638,8 +664,21 @@ class TradeStrategy(BaseModule):
                 logger.info('发现遗漏信号: %s', sig)
                 self.process_signal(sig.instrument, use_tick=True)
 
+    @param_function(crontab='55 20 * * * 5')
+    async def processing_processed3(self):
+        day = datetime.datetime.today()
+        day = day.replace(tzinfo=pytz.FixedOffset(480))
+        _, trading = await is_trading_day(day)
+        if trading:
+            logger.info('查询待处理夜盘信号..')
+            for sig in Signal.objects.filter(
+                    ~Q(instrument__exchange=ExchangeType.CFFEX),
+                    strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
+                logger.info('发现夜盘信号: %s', sig)
+                self.process_signal(sig.instrument)
+
     @param_function(crontab='1 21 * * *')
-    async def check_signal_processed3(self):
+    async def check_signal3_processed(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
