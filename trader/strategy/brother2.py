@@ -64,7 +64,7 @@ class TradeStrategy(BaseModule):
     __ATR = {}
     __broker = Broker.objects.get(id=2)
     __strategy = Strategy.objects.get(id=2)
-    __inst_ids = Strategy.objects.get(id=2).instruments.all().values_list('production_code', flat=True)
+    __inst_ids = Strategy.objects.get(id=2).instruments.all().values_list('product_code', flat=True)
 
     def update_order(self, order: dict):
         if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
