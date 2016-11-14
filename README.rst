@@ -13,9 +13,9 @@ INSTALL
 
     [mysqld]
 
-    wait_timeout=86400
+    wait_timeout=31536000
 
-    interactive_timeout=86400
+    interactive_timeout=31536000
 
 重启mysql服务
 
