@@ -200,20 +200,22 @@ async def update_from_czce(day: datetime.datetime):
 async def update_from_dce(day: datetime.datetime):
     try:
         async with aiohttp.ClientSession() as session:
-            day_str = day.strftime('%Y%m%d')
             await max_conn_dce.acquire()
-            async with session.post('http://{}/PublicWeb/MainServlet'.format(dce_ip), data={
-                'action': 'Pu00011_result', 'Pu00011_Input.trade_date': day_str, 'Pu00011_Input.variety': 'all',
-                    'Pu00011_Input.trade_type': 0}) as response:
+            async with session.post('http://{}/publicweb/quotesdata/exportDayQuotesChData.html'.format(dce_ip), data={
+                    'dayQuotes.variety': 'all', 'dayQuotes.trade_type': 0, 'exportFlag': 'txt'}) as response:
                 rst = await response.text()
                 max_conn_dce.release()
-                soup = BeautifulSoup(rst, 'lxml')
-                for tr in soup.select("tr")[2:-4]:
-                    inst_data = list(tr.stripped_strings)
-                    # error_data = inst_data
+                for lines in rst.split('\r\n')[1:-3]:
+                    if '小计' in lines or '品种' in lines:
+                        continue
+                    inst_data_raw = [x.strip() for x in lines.split('\t')]
+                    inst_data = []
+                    for cell in inst_data_raw:
+                        if len(cell) > 0:
+                            inst_data.append(cell)
                     """
     [0'商品名称', 1'交割月份', 2'开盘价', 3'最高价', 4'最低价', 5'收盘价', 6'前结算价', 7'结算价', 8'涨跌', 9'涨跌1', 10'成交量', 11'持仓量', 12'持仓量变化', 13'成交额']
-    ['豆一', '1609', '3,699', '3,705', '3,634', '3,661', '3,714', '3,668', '-53', '-46', '5,746', '5,104', '-976', '21,077.13']
+    ['豆一', '1611', '3,760', '3,760', '3,760', '3,760', '3,860', '3,760', '-100', '-100', '2', '0', '0', '7.52']
                     """
                     if '小计' in inst_data[0]:
                         continue

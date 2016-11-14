@@ -44,10 +44,9 @@ class TradeStrategy(BaseModule):
     __request_format = config.get('MSG_CHANNEL', 'request_format')
     __request_id = random.randint(0, 65535)
     __order_ref = random.randint(0, 999)
-    __inst_ids = list()
     __instruments = defaultdict(dict)
-    __fake = 0  # 虚拟资金
-    __current = 0  # 当前动态权益
+    __fake = 600000  # 虚拟资金
+    __current = Broker.objects.get(id=2).current  # 当前动态权益
     __pre_balance = 0  # 静态权益
     __cash = 0  # 可用资金
     __shares = dict()  # { instrument : position }
@@ -63,8 +62,9 @@ class TradeStrategy(BaseModule):
     __last_time = None
     __watch_pos = {}
     __ATR = {}
-    __broker = None
-    __strategy = None
+    __broker = Broker.objects.get(id=2)
+    __strategy = Strategy.objects.get(id=2)
+    __inst_ids = Strategy.objects.get(id=2).instruments.all().values_list('production_code', flat=True)
 
     def update_order(self, order: dict):
         if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
