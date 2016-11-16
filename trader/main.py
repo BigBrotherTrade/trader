@@ -34,10 +34,17 @@ def main():
     loop = asyncio.get_event_loop()
     big_brother = None
     try:
+        pid_path = os.path.join(app_dir.user_cache_dir, 'trader.pid')
+        if not os.path.exists(pid_path):
+            if not os.path.exists(app_dir.user_cache_dir):
+                os.makedirs(app_dir.user_cache_dir)
+        with open(pid_path, 'w') as pid_file:
+            pid_file.write(str(os.getpid()))
         big_brother = TradeStrategy(io_loop=loop)
         print('Big Brother is watching you!')
         print('used config file:', config_file)
         print('log stored in:', app_dir.user_log_dir)
+        print('pid file:', pid_path)
         loop.create_task(big_brother.install())
         loop.run_forever()
     except KeyboardInterrupt:
