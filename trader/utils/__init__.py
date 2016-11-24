@@ -83,7 +83,7 @@ async def is_trading_day(day: datetime.datetime):
     s = redis.StrictRedis(
         host=config.get('REDIS', 'host', fallback='localhost'),
         db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
-    if day.strftime('%Y%m%d') == s.get('TradingDay'):
+    if s.get('ConfirmDate') == s.get('TradingDay'):
         return day, True
     async with aiohttp.ClientSession() as session:
         await max_conn_cffex.acquire()
