@@ -64,26 +64,32 @@ def str_to_number(s):
         return float(s)
 
 
-def myround(x: Decimal, base: Decimal):
-    prec = 0
+def price_round(x: Decimal, base: Decimal):
+    """
+    根据最小精度取整，例如对于IF最小精度是0.2，那么 1.3 -> 1.2, 1.5 -> 1.4
+    :param x: Decimal 待取整的数
+    :param base: Decimal 最小精度
+    :return: float 取整结果
+    """
+    precision = 0
     s = str(round(base, 3) % 1)
     s = s.rstrip('0').rstrip('.') if '.' in s else s
     p1, *p2 = s.split('.')
     if p2:
-        prec = len(p2[0])
-    return round(base * round(x / base), prec)
+        precision = len(p2[0])
+    return round(base * round(x / base), precision)
 
 
 async def is_trading_day(day: datetime.datetime):
     """
     判断是否是交易日, 方法是从中金所获取今日的K线数据,判断http的返回码(如果出错会返回302重定向至404页面),
-    因为开市前也可能返回302, 所以适合收市后(下午)使用
+    因为开市前也可能返回302, 只能收市后(下午)使用， 其余时间使用API推送的日期判断
     :return: bool
     """
     s = redis.StrictRedis(
         host=config.get('REDIS', 'host', fallback='localhost'),
         db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
-    if s.get('ConfirmDate') == s.get('TradingDay'):
+    if day.strftime('%Y%m%d') == s.get('TradingDay'):
         return day, True
     async with aiohttp.ClientSession() as session:
         await max_conn_cffex.acquire()
@@ -94,7 +100,7 @@ async def is_trading_day(day: datetime.datetime):
             return day, response.status != 302
 
 
-def calc_expire_date(inst_code: str, day: datetime.datetime):
+def get_expire_date(inst_code: str, day: datetime.datetime):
     expire_date = int(re.findall('\d+', inst_code)[0])
     if expire_date < 1000:
         year_exact = math.floor(day.year % 100 / 10)
@@ -181,7 +187,7 @@ async def update_from_czce(day: datetime.datetime):
                 DailyBar.objects.update_or_create(
                     code=inst_data[0],
                     exchange=ExchangeType.CZCE, time=day, defaults={
-                        'expire_date': calc_expire_date(inst_data[0], day),
+                        'expire_date': get_expire_date(inst_data[0], day),
                         'open': inst_data[2].replace(',', '') if Decimal(inst_data[2].replace(',', '')) > 0.1
                         else close,
                         'high': inst_data[3].replace(',', '') if Decimal(inst_data[3].replace(',', '')) > 0.1
@@ -329,7 +335,7 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
     """
     updated = False
     if inst.main_code is not None:
-        expire_date = calc_expire_date(inst.main_code, day)
+        expire_date = get_expire_date(inst.main_code, day)
     else:
         expire_date = day.strftime('%y%m')
     # 条件1: 成交量最大 & (成交量>1万 & 持仓量>1万 or 股指) = 主力合约
@@ -646,14 +652,14 @@ def calc_his_all(day: datetime.datetime):
 def calc_his_up_limit(inst: Instrument, bar: DailyBar):
     ratio = inst.up_limit_ratio
     ratio = Decimal(round(ratio, 3))
-    price = myround(bar.settlement * (Decimal(1) + ratio), inst.price_tick)
+    price = price_round(bar.settlement * (Decimal(1) + ratio), inst.price_tick)
     return price - inst.price_tick
 
 
 def calc_his_down_limit(inst: Instrument, bar: DailyBar):
     ratio = inst.down_limit_ratio
     ratio = Decimal(round(ratio, 3))
-    price = myround(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
+    price = price_round(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
     return price + inst.price_tick
 
 async def clean_daily_bar():

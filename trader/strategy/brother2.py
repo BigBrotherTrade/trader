@@ -30,7 +30,7 @@ from trader.strategy import BaseModule
 from trader.utils.func_container import param_function
 from trader.utils.read_config import *
 from trader.utils import logger as my_logger, calc_main_inst, is_auction_time
-from trader.utils import ApiStruct, myround, is_trading_day, update_from_shfe, update_from_dce, \
+from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, \
     update_from_czce, update_from_cffex
 from panel.models import *
 
@@ -554,7 +554,7 @@ class TradeStrategy(BaseModule):
     async def OnRtnOrder(self, channel, order: dict):
         try:
             order_ref = channel.split(':')[-1]
-            # logger.info('order_ref=%s, order: %s', order_ref, order)
+            logger.info('order_ref=%s, order: %s', order_ref, order)
             inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', order['InstrumentID'])[0])
             Order.objects.update_or_create(order_ref=order_ref, defaults={
                 'broker': self.__broker, 'strategy': self.__strategy, 'instrument': inst,
@@ -566,8 +566,49 @@ class TradeStrategy(BaseModule):
                 'send_time': datetime.datetime.strptime(
                     order['InsertDate']+order['InsertTime'], '%Y%m%d%H:%M:%S').replace(
                     tzinfo=pytz.FixedOffset(480)),
-                'update_time': datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
-            })
+                'update_time': datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))})
+            # 处理由于委托价格超出交易所涨跌停板而被撤单的报单，将委托价格下调80%，重新报单
+            if order['OrderStatus'] == ApiStruct.OSS_CancelRejected:
+                last_bar = DailyBar.objects.filter(
+                    exchange=inst.exchange, code=order['InstrumentID']).order_by('-time').first()
+                volume = int(order['VolumeTotalOriginal'])
+                if order['CombOffsetFlag'] == ApiStruct.OF_Open:
+                    if order['Direction'] == ApiStruct.D_Buy:
+                        new_price = (Decimal(order['LimitPrice']) - last_bar.settlement) * Decimal(0.8)
+                        if new_price / last_bar.settlement < 0.1:
+                            logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
+                            return
+                        new_price = price_round(last_bar.settlement + new_price, inst.price_tick)
+                        logger.info('%s 重新尝试开多%s手 价格: %s', inst, volume, new_price)
+                        self.io_loop.create_task(self.buy(inst, new_price, volume))
+                    else:
+                        new_price = (last_bar.settlement - Decimal(order['LimitPrice'])) * Decimal(0.8)
+                        if new_price / last_bar.settlement < 0.1:
+                            logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
+                            return
+                        new_price = price_round(last_bar.settlement - new_price, inst.price_tick)
+                        logger.info('%s 重新尝试开空%s手 价格: %s', inst, volume, new_price)
+                        self.io_loop.create_task(self.sell_short(inst, new_price, volume))
+                else:
+                    pos = Trade.objects.filter(
+                        close_time__isnull=True, code=order['InstrumentID'], broker=self.__broker,
+                        strategy=self.__strategy, instrument=inst, shares__gt=0).first()
+                    if order['Direction'] == ApiStruct.D_Buy:
+                        new_price = (Decimal(order['LimitPrice']) - last_bar.settlement) * Decimal(0.8)
+                        if new_price / last_bar.settlement < 0.1:
+                            logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
+                            return
+                        new_price = price_round(last_bar.settlement + new_price, inst.price_tick)
+                        logger.info('%s 重新尝试买平%s手 价格: %s', inst, volume, new_price)
+                        self.io_loop.create_task(self.buy_cover(pos, new_price, volume))
+                    else:
+                        new_price = (last_bar.settlement - Decimal(order['LimitPrice'])) * Decimal(0.8)
+                        if new_price / last_bar.settlement < 0.1:
+                            logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
+                            return
+                        new_price = price_round(last_bar.settlement - new_price, inst.price_tick)
+                        logger.info('%s 重新尝试卖平%s手 价格: %s', inst, volume, new_price)
+                        self.io_loop.create_task(self.sell(pos, new_price, volume))
         except Exception as ee:
             logger.error('OnRtnOrder failed: %s', repr(ee), exc_info=True)
 
@@ -1070,7 +1111,7 @@ class TradeStrategy(BaseModule):
         ratio = (Decimal(tick['UpperLimitPrice']) -
                  Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
         ratio = Decimal(round(ratio, 3))
-        price = myround(bar.settlement * (Decimal(1) + ratio), inst.price_tick)
+        price = price_round(bar.settlement * (Decimal(1) + ratio), inst.price_tick)
         return price - inst.price_tick
 
     def calc_down_limit(self, inst: Instrument, bar: DailyBar):
@@ -1078,5 +1119,5 @@ class TradeStrategy(BaseModule):
         ratio = (Decimal(tick['PreSettlementPrice']) -
                  Decimal(tick['LowerLimitPrice'])) / Decimal(tick['PreSettlementPrice'])
         ratio = Decimal(round(ratio, 3))
-        price = myround(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
+        price = price_round(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
         return price + inst.price_tick
