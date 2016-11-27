@@ -81,23 +81,17 @@ def price_round(x: Decimal, base: Decimal):
 
 
 async def is_trading_day(day: datetime.datetime):
-    """
-    判断是否是交易日, 方法是从中金所获取今日的K线数据,判断http的返回码(如果出错会返回302重定向至404页面),
-    因为开市前也可能返回302, 只能收市后(下午)使用， 其余时间使用API推送的日期判断
-    :return: bool
-    """
     s = redis.StrictRedis(
         host=config.get('REDIS', 'host', fallback='localhost'),
         db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
-    if day.strftime('%Y%m%d') == s.get('TradingDay'):
-        return day, True
-    async with aiohttp.ClientSession() as session:
-        await max_conn_cffex.acquire()
-        async with session.get(
-                'http://{}/fzjy/mrhq/{}/index.xml'.format(cffex_ip, day.strftime('%Y%m/%d')),
-                allow_redirects=False) as response:
-            max_conn_cffex.release()
-            return day, response.status != 302
+    return day, day.strftime('%Y%m%d') in (s.get('TradingDay'), s.get('LastTradingDay'))
+    # async with aiohttp.ClientSession() as session:
+    #     await max_conn_cffex.acquire()
+    #     async with session.get(
+    #             'http://{}/fzjy/mrhq/{}/index.xml'.format(cffex_ip, day.strftime('%Y%m/%d')),
+    #             allow_redirects=False) as response:
+    #         max_conn_cffex.release()
+    #         return day, response.status != 302
 
 
 def get_expire_date(inst_code: str, day: datetime.datetime):
