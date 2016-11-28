@@ -575,7 +575,7 @@ class TradeStrategy(BaseModule):
                 if order['CombOffsetFlag'] == ApiStruct.OF_Open:
                     if order['Direction'] == ApiStruct.D_Buy:
                         new_price = (Decimal(order['LimitPrice']) - last_bar.settlement) * Decimal(0.8)
-                        if new_price / last_bar.settlement < 0.1:
+                        if new_price / last_bar.settlement < 0.01:
                             logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
                             return
                         new_price = price_round(last_bar.settlement + new_price, inst.price_tick)
@@ -583,7 +583,7 @@ class TradeStrategy(BaseModule):
                         self.io_loop.create_task(self.buy(inst, new_price, volume))
                     else:
                         new_price = (last_bar.settlement - Decimal(order['LimitPrice'])) * Decimal(0.8)
-                        if new_price / last_bar.settlement < 0.1:
+                        if new_price / last_bar.settlement < 0.01:
                             logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
                             return
                         new_price = price_round(last_bar.settlement - new_price, inst.price_tick)
@@ -595,7 +595,7 @@ class TradeStrategy(BaseModule):
                         strategy=self.__strategy, instrument=inst, shares__gt=0).first()
                     if order['Direction'] == ApiStruct.D_Buy:
                         new_price = (Decimal(order['LimitPrice']) - last_bar.settlement) * Decimal(0.8)
-                        if new_price / last_bar.settlement < 0.1:
+                        if new_price / last_bar.settlement < 0.01:
                             logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
                             return
                         new_price = price_round(last_bar.settlement + new_price, inst.price_tick)
@@ -603,7 +603,7 @@ class TradeStrategy(BaseModule):
                         self.io_loop.create_task(self.buy_cover(pos, new_price, volume))
                     else:
                         new_price = (last_bar.settlement - Decimal(order['LimitPrice'])) * Decimal(0.8)
-                        if new_price / last_bar.settlement < 0.1:
+                        if new_price / last_bar.settlement < 0.01:
                             logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
                             return
                         new_price = price_round(last_bar.settlement - new_price, inst.price_tick)
