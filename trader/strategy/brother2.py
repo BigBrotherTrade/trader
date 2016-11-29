@@ -707,7 +707,7 @@ class TradeStrategy(BaseModule):
                 self.process_signal(sig, use_tick=True)
 
     @param_function(crontab='55 20 * * * 5')
-    async def processing_processed3(self):
+    async def processing_signal3(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
