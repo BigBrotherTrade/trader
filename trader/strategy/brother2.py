@@ -1013,6 +1013,8 @@ class TradeStrategy(BaseModule):
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     price = self.calc_up_limit(inst, new_bar)
+                else:
+                    logger.info('做多单手风险=%s,超出风控额度，放弃。', df.atr[idx] * inst.volume_multiple)
             # 做空
             elif sell_sig:
                 volume = (self.__current + self.__fake) * risk // \
@@ -1023,6 +1025,8 @@ class TradeStrategy(BaseModule):
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     price = self.calc_down_limit(inst, new_bar)
+                else:
+                    logger.info('做空单手风险=%s,超出风控额度，放弃。', df.atr[idx] * inst.volume_multiple)
             if signal is not None:
                 Signal.objects.update_or_create(
                     code=inst.main_code,
