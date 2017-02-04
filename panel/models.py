@@ -138,6 +138,7 @@ class Instrument(models.Model):
     section = models.CharField('分类', max_length=48, null=True, blank=True, choices=SectionType.choices)
     name = models.CharField('名称', max_length=32, null=True, blank=True)
     product_code = models.CharField('代码', max_length=16, unique=True)
+    sina_code = models.CharField('新浪代码', max_length=16, null=True, blank=True)
     all_inst = models.CharField('品种列表', max_length=128, null=True, blank=True)
     main_code = models.CharField('主力合约', max_length=16, null=True, blank=True)
     last_main = models.CharField('上个主力', max_length=16, null=True, blank=True)

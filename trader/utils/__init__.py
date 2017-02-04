@@ -24,10 +24,9 @@ from functools import reduce
 from itertools import combinations
 
 import pytz
-from bs4 import BeautifulSoup
 import aiohttp
 from django.db.models import F, Q, Max, Min
-
+import demjson
 import redis
 import quandl
 from talib.abstract import ATR
@@ -44,6 +43,7 @@ max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
 max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
+max_conn_sina = asyncio.Semaphore(15)
 quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
 # cffex_ip = '183.195.155.138'    # www.cffex.com.cn
 cffex_ip = 'www.cffex.com.cn'    # www.cffex.com.cn
@@ -287,6 +287,37 @@ async def update_from_cffex(day: datetime.datetime):
                             'open_interest': inst_data.findtext('openinterest').replace(',', '')})
     except Exception as e:
         print('update_from_cffex failed: ' % e)
+
+
+async def update_from_sina(day: datetime.datetime, inst: Instrument):
+    try:
+        async with aiohttp.ClientSession() as session:
+            await max_conn_sina.acquire()
+            async with session.get('http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php'
+                                   '/Market_Center.getHQFuturesData?page=1&num=20&sort=position&asc=0&'
+                                   'node={}&base=futures'.format(inst.sina_code)) as response:
+                rst = await response.text()
+                max_conn_sina.release()
+                for inst_data in demjson.decode(rst):
+                    if '连续' in inst_data['name']:
+                        continue
+                    DailyBar.objects.update_or_create(
+                        code=inst_data['symbol'],
+                        exchange=inst.exchange, time=day, defaults={
+                            'expire_date': get_expire_date(inst_data['symbol'], day),
+                            'open': inst_data['open'] if inst_data['open'] != '0' else
+                            inst_data['close'],
+                            'high': inst_data['high'] if inst_data['high'] != '0' else
+                            inst_data['close'],
+                            'low': inst_data['low'] if inst_data['low'] != '0' else
+                            inst_data['close'],
+                            'close': inst_data['close'],
+                            'settlement': inst_data['settlement'] if inst_data['settlement'] != '0' else
+                            inst_data['prevsettlement'],
+                            'volume': inst_data['volume'],
+                            'open_interest': inst_data['position']})
+    except Exception as e:
+        print('update_from_sina failed: ' % e)
 
 
 def store_main_bar(bar: DailyBar):

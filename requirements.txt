@@ -1,3 +1,4 @@
+demjson
 aiohttp
 aioredis
 redis

@@ -31,7 +31,7 @@ from trader.utils.func_container import param_function
 from trader.utils.read_config import *
 from trader.utils import logger as my_logger, calc_main_inst, is_auction_time
 from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, \
-    update_from_czce, update_from_cffex
+    update_from_czce, update_from_cffex, update_from_sina
 from panel.models import *
 
 logger = my_logger.get_logger('CTPApi')
@@ -791,14 +791,15 @@ class TradeStrategy(BaseModule):
                 logger.info('今日是非交易日, 不计算任何数据。')
                 return
             logger.info('每日盘后计算, day: %s, 获取交易所日线数据..', day)
-            tasks = [
-                self.io_loop.create_task(update_from_shfe(day)),
-                self.io_loop.create_task(update_from_dce(day)),
-                self.io_loop.create_task(update_from_czce(day)),
-                self.io_loop.create_task(update_from_cffex(day)),
-            ]
-            await asyncio.wait(tasks)
-            for inst_obj in Instrument.objects.all():
+            # tasks = [
+            #     self.io_loop.create_task(update_from_shfe(day)),
+            #     self.io_loop.create_task(update_from_dce(day)),
+            #     self.io_loop.create_task(update_from_czce(day)),
+            #     self.io_loop.create_task(update_from_cffex(day)),
+            # ]
+            # await asyncio.wait(tasks)
+            await asyncio.wait([update_from_sina(day, inst) for inst in Instrument.objects.filter(sina_code__isnull=False)])
+            for inst_obj in Instrument.objects.filter(sina_code__isnull=False):
                 logger.info('计算连续合约, 交易信号: %s', inst_obj.name)
                 if inst_obj.name == 'ZC':
                     continue
