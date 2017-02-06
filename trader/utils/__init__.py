@@ -305,12 +305,9 @@ async def update_from_sina(day: datetime.datetime, inst: Instrument):
                         code=inst_data['symbol'],
                         exchange=inst.exchange, time=day, defaults={
                             'expire_date': get_expire_date(inst_data['symbol'], day),
-                            'open': inst_data['open'] if inst_data['open'] != '0' else
-                            inst_data['close'],
-                            'high': inst_data['high'] if inst_data['high'] != '0' else
-                            inst_data['close'],
-                            'low': inst_data['low'] if inst_data['low'] != '0' else
-                            inst_data['close'],
+                            'open': inst_data['open'] if inst_data['open'] != '0' else inst_data['close'],
+                            'high': inst_data['high'] if inst_data['high'] != '0' else inst_data['close'],
+                            'low': inst_data['low'] if inst_data['low'] != '0' else inst_data['close'],
                             'close': inst_data['close'],
                             'settlement': inst_data['settlement'] if inst_data['settlement'] != '0' else
                             inst_data['prevsettlement'],
