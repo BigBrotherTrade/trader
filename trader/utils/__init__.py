@@ -139,7 +139,7 @@ async def update_from_shfe(day: datetime.datetime):
                             'volume': inst_data['VOLUME'] if inst_data['VOLUME'] else 0,
                             'open_interest': inst_data['OPENINTEREST'] if inst_data['OPENINTEREST'] else 0})
     except Exception as e:
-        print('update_from_shfe failed: ' % e)
+        print('update_from_shfe failed: %s' % e)
 
 
 async def fetch_czce_page(session, url):
@@ -152,7 +152,7 @@ async def fetch_czce_page(session, url):
         max_conn_czce.release()
         return rst
     except Exception as e:
-        print('fetch_czce_page failed: ' % e)
+        print('fetch_czce_page failed: %s' % e)
 
 
 async def update_from_czce(day: datetime.datetime):
@@ -194,7 +194,7 @@ async def update_from_czce(day: datetime.datetime):
                         'volume': inst_data[9].replace(',', ''),
                         'open_interest': inst_data[10].replace(',', '')})
     except Exception as e:
-        print('update_from_czce failed: ' % e)
+        print('update_from_czce failed: %s' % e)
 
 
 async def update_from_dce(day: datetime.datetime):
@@ -235,7 +235,7 @@ async def update_from_dce(day: datetime.datetime):
                             'volume': inst_data[10].replace(',', ''),
                             'open_interest': inst_data[11].replace(',', '')})
     except Exception as e:
-        print('update_from_dce failed: ' % e)
+        print('update_from_dce failed: %s' % e)
 
 
 async def update_from_cffex(day: datetime.datetime):
@@ -286,7 +286,7 @@ async def update_from_cffex(day: datetime.datetime):
                             'volume': inst_data.findtext('volume').replace(',', ''),
                             'open_interest': inst_data.findtext('openinterest').replace(',', '')})
     except Exception as e:
-        print('update_from_cffex failed: ' % e)
+        print('update_from_cffex failed: %s' % e)
 
 
 async def update_from_sina(day: datetime.datetime, inst: Instrument):
@@ -296,6 +296,7 @@ async def update_from_sina(day: datetime.datetime, inst: Instrument):
             async with session.get('http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php'
                                    '/Market_Center.getHQFuturesData?page=1&num=20&sort=position&asc=0&'
                                    'node={}&base=futures'.format(inst.sina_code)) as response:
+                print('获取', inst)
                 rst = await response.text()
                 max_conn_sina.release()
                 for inst_data in demjson.decode(rst):
@@ -314,7 +315,7 @@ async def update_from_sina(day: datetime.datetime, inst: Instrument):
                             'volume': inst_data['volume'],
                             'open_interest': inst_data['position']})
     except Exception as e:
-        print('update_from_sina failed: ' % e)
+        print('update_from_sina failed: %s' % e)
 
 
 def store_main_bar(bar: DailyBar):
