@@ -1112,6 +1112,7 @@ class TradeStrategy(BaseModule):
                 self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
 
     def calc_up_limit(self, inst: Instrument, bar: DailyBar):
+        logger.info('bar:%s', bar)
         tick = json.loads(self.redis_client.get(bar.code))
         ratio = (Decimal(tick['UpperLimitPrice']) -
                  Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
