@@ -732,7 +732,7 @@ class TradeStrategy(BaseModule):
                 logger.info('发现遗漏信号: %s', sig)
                 self.process_signal(sig, use_tick=True)
 
-    @param_function(crontab='20 15 * * *')
+    @param_function(crontab='32 11 * * *')
     async def refresh_instrument(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
