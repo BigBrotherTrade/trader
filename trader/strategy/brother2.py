@@ -749,7 +749,6 @@ class TradeStrategy(BaseModule):
         inst_dict = defaultdict(dict)
         regex = re.compile('(.*?)([0-9]+)$')
         inst_list = await self.query('Instrument')
-        logger.info('合约列表：%s', inst_list)
         for inst in inst_list:
             if not inst['empty']:
                 if inst['IsTrading'] == 1:
