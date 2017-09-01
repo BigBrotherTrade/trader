@@ -469,6 +469,7 @@ class TradeStrategy(BaseModule):
     #     except Exception as ee:
     #         logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
+    # TODO 有时更新仓位计算会出现错误，导致同样的品种头寸被插入而不是更新
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnTrade:*')
     async def OnRtnTrade(self, channel, trade: dict):
         try:
@@ -732,6 +733,7 @@ class TradeStrategy(BaseModule):
                 logger.info('发现遗漏信号: %s', sig)
                 self.process_signal(sig, use_tick=True)
 
+    # TODO 有时候未能更新到某品种的全部合约，从而无法接收到该品种最新合约的tick，导致出现信号时无法计算开仓价格
     @param_function(crontab='20 15 * * *')
     async def refresh_instrument(self):
         day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
