@@ -685,6 +685,7 @@ def calc_his_down_limit(inst: Instrument, bar: DailyBar):
     price = price_round(bar.settlement * (Decimal(1) - ratio), inst.price_tick)
     return price + inst.price_tick
 
+
 async def clean_daily_bar():
     day = datetime.datetime.strptime('20100416', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
     end = datetime.datetime.strptime('20160118', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))

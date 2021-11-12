@@ -22,7 +22,7 @@ import pytz
 from decimal import Decimal
 
 from django.db.models import Q, Max, Min, Sum
-from talib.abstract import ATR
+from talib import ATR
 import ujson as json
 import aioredis
 
