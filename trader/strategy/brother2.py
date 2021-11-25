@@ -46,7 +46,7 @@ class TradeStrategy(BaseModule):
     __order_ref = random.randint(0, 999)
     __instruments = defaultdict(dict)
     __fake = 600000  # 虚拟资金
-    __current = Broker.objects.get(id=2).current  # 当前动态权益
+    __current = Broker.objects.get(id=1).current  # 当前动态权益
     __pre_balance = 0  # 静态权益
     __cash = 0  # 可用资金
     __shares = dict()  # { instrument : position }
@@ -62,9 +62,9 @@ class TradeStrategy(BaseModule):
     __last_time = None
     __watch_pos = {}
     __ATR = {}
-    __broker = Broker.objects.get(id=2)
-    __strategy = Strategy.objects.get(id=2)
-    __inst_ids = Strategy.objects.get(id=2).instruments.all().values_list('product_code', flat=True)
+    __broker = Broker.objects.get(id=1)
+    __strategy = Strategy.objects.get(id=1)
+    __inst_ids = Strategy.objects.get(id=1).instruments.all().values_list('product_code', flat=True)
 
     def update_order(self, order: dict):
         if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
@@ -144,10 +144,10 @@ class TradeStrategy(BaseModule):
                     'profit': profit, 'frozen_margin': Decimal(pos['Margin'])})
 
     @staticmethod
-    async def query_reader(ch: aioredis.Channel, cb: asyncio.Future):
+    async def query_reader(ch: aioredis.client.PubSub, cb: asyncio.Future):
         msg_list = []
-        while await ch.wait_message():
-            _, msg = await ch.get(encoding='utf-8')
+        while await ch.listen():
+            _, msg = await ch.get_message(ignore_subscribe_messages=True)
             msg_dict = json.loads(msg)
             if 'empty' in msg_dict:
                 if msg_dict['empty'] is False:

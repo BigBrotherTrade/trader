@@ -41,8 +41,11 @@ encoding = utf-8
 host = 127.0.0.1
 port = 3306
 db = QuantDB
-user = root
-password =
+user = quant
+password = 123456
+
+[QuantDL]
+api_key = 123456
 
 [LOG]
 level = INFO

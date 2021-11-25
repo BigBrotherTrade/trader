@@ -29,7 +29,7 @@ from django.db.models import F, Q, Max, Min
 import demjson
 import redis
 import quandl
-from talib.abstract import ATR
+from talib import ATR
 from tqdm import tqdm
 
 from panel.models import *

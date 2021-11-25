@@ -36,13 +36,11 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
     def __init__(self, io_loop: asyncio.AbstractEventLoop = None):
         super().__init__()
         self.io_loop = io_loop or asyncio.get_event_loop()
-        self.sub_client = self.io_loop.run_until_complete(
-                aioredis.create_redis((config.get('REDIS', 'host', fallback='localhost'),
-                                       config.getint('REDIS', 'port', fallback=6379)),
-                                      db=config.getint('REDIS', 'db', fallback=1)))
-        self.redis_client = redis.StrictRedis(
-            host=config.get('REDIS', 'host', fallback='localhost'),
-            db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
+        self.redis_client = aioredis.from_url(
+            f"redis://{config.get('REDIS', 'host', fallback='localhost')}:"
+            f"{config.getint('REDIS', 'port', fallback=6379)}/{config.getint('REDIS', 'db', fallback=1)}",
+            decode_responses=True)
+        self.sub_client = self.redis_client.pubsub()
         self.initialized = False
         self.sub_tasks = list()
         self.sub_channels = list()
@@ -106,7 +104,7 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
         except Exception as e:
             logger.error('%s plugin uninstall failed: %s', type(self).__name__, repr(e), exc_info=True)
 
-    async def _msg_reader(self, ch):
+    async def _msg_reader(self, ch: aioredis.client.PubSub):
         while await ch.wait_message():
             real_channel, msg = await ch.get_json()
             channel = ch.name.decode()

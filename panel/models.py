@@ -17,7 +17,7 @@ import pandas as pd
 from pandas.io.sql import read_sql_query
 from django.db import models
 from django.db import connection
-from django.db.models.sql import EmptyResultSet
+from django.core.exceptions import EmptyResultSet
 
 from .const import *
 
@@ -54,7 +54,8 @@ class Address(models.Model):
 class Broker(models.Model):
     name = models.CharField(verbose_name='名称', max_length=64)
     contract_type = models.CharField(verbose_name='市场', max_length=32, choices=ContractType.choices)
-    trade_address = models.ForeignKey(Address, verbose_name='交易前置', on_delete=models.CASCADE, related_name='trade_address')
+    trade_address = models.ForeignKey(Address, verbose_name='交易前置', on_delete=models.CASCADE,
+                                      related_name='trade_address')
     market_address = models.ForeignKey(Address, verbose_name='行情前置', on_delete=models.CASCADE,
                                        related_name='market_address')
     identify = models.CharField(verbose_name='唯一标志', max_length=32)
