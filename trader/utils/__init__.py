@@ -13,6 +13,7 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+import ujson as json
 from decimal import Decimal
 import datetime
 import math
@@ -31,13 +32,14 @@ import redis
 import quandl
 from talib import ATR
 from tqdm import tqdm
+# import tushare
 
 from panel.models import *
 from trader.utils import ApiStruct
 from trader.utils.read_config import config
-# from trader.utils import logger as my_logger
+from trader.utils import logger as my_logger
 
-# logger = my_logger.get_logger('trade.utils')
+logger = my_logger.get_logger('trade.utils')
 
 max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
@@ -53,6 +55,7 @@ shfe_ip = 'www.shfe.com.cn'      # www.shfe.com.cn
 czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
 # dce_ip = '218.25.154.94'        # www.dce.com.cn
 dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
+# ts_api = tushare.pro_api(config.get('Tushare', 'token'))
 
 
 def str_to_number(s):
@@ -85,17 +88,20 @@ async def is_trading_day(day: datetime.datetime):
         host=config.get('REDIS', 'host', fallback='localhost'),
         db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
     return day, day.strftime('%Y%m%d') in (s.get('TradingDay'), s.get('LastTradingDay'))
-    # async with aiohttp.ClientSession() as session:
-    #     await max_conn_cffex.acquire()
-    #     async with session.get(
-    #             'http://{}/fzjy/mrhq/{}/index.xml'.format(cffex_ip, day.strftime('%Y%m/%d')),
-    #             allow_redirects=False) as response:
-    #         max_conn_cffex.release()
-    #         return day, response.status != 302
+
+
+async def check_trading_day(day: datetime.datetime) -> (datetime.datetime, bool):
+    async with aiohttp.ClientSession() as session:
+        await max_conn_cffex.acquire()
+        async with session.get(
+                'http://{}/fzjy/mrhq/{}/index.xml'.format(cffex_ip, day.strftime('%Y%m/%d')),
+                allow_redirects=False) as response:
+            max_conn_cffex.release()
+            return day, response.status == 200
 
 
 def get_expire_date(inst_code: str, day: datetime.datetime):
-    expire_date = int(re.findall('\d+', inst_code)[0])
+    expire_date = int(re.findall(r'\d+', inst_code)[0])
     if expire_date < 1000:
         year_exact = math.floor(day.year % 100 / 10)
         if expire_date < 100 and day.year % 10 == 9:
@@ -104,26 +110,28 @@ def get_expire_date(inst_code: str, day: datetime.datetime):
     return expire_date
 
 
-async def update_from_shfe(day: datetime.datetime):
+async def update_from_shfe(day: datetime.datetime) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             day_str = day.strftime('%Y%m%d')
             await max_conn_shfe.acquire()
-            async with session.get('http://{}/data/dailydata/kx/kx{}.dat'.format(shfe_ip, day_str)) as response:
-                rst_json = await response.json()
+            async with session.get(f'http://{shfe_ip}/data/dailydata/kx/kx{day_str}.dat') as response:
+                rst = await response.read()
+                rst_json = json.loads(rst)
                 max_conn_shfe.release()
                 for inst_data in rst_json['o_curinstrument']:
                     """
-        {'OPENINTERESTCHG': -11154, 'CLOSEPRICE': 36640, 'SETTLEMENTPRICE': 36770, 'OPENPRICE': 36990,
-        'PRESETTLEMENTPRICE': 37080, 'ZD2_CHG': -310, 'DELIVERYMONTH': '1609', 'VOLUME': 51102,
-        'PRODUCTSORTNO': 10, 'ZD1_CHG': -440, 'OPENINTEREST': 86824, 'ORDERNO': 0, 'PRODUCTNAME': '铜                  ',
-        'LOWESTPRICE': 36630, 'PRODUCTID': 'cu_f    ', 'HIGHESTPRICE': 37000}
+        {"PRODUCTID":"cu_f    ","PRODUCTGROUPID":"cu      ","PRODUCTSORTNO":10,"PRODUCTNAME":"铜                  ",
+        "DELIVERYMONTH":"2112","PRESETTLEMENTPRICE":69850,"OPENPRICE":69770,"HIGHESTPRICE":70280,"LOWESTPRICE":69600,
+        "CLOSEPRICE":69900,"SETTLEMENTPRICE":69950,"ZD1_CHG":50,"ZD2_CHG":100,"VOLUME":19450,"TURNOVER":680294.525,
+        "TASVOLUME":"","OPENINTEREST":19065,"OPENINTERESTCHG":-5585,"ORDERNO":0,"ORDERNO2":0}
                     """
                     # error_data = inst_data
                     if inst_data['DELIVERYMONTH'] == '小计' or inst_data['PRODUCTID'] == '总计':
                         continue
-                    if '_' not in inst_data['PRODUCTID']:
+                    if '_f' not in inst_data['PRODUCTID']:
                         continue
+                    # logger.info(f'inst_data: {inst_data}')
                     DailyBar.objects.update_or_create(
                         code=inst_data['PRODUCTID'].split('_')[0] + inst_data['DELIVERYMONTH'],
                         exchange=ExchangeType.SHFE, time=day, defaults={
@@ -138,71 +146,60 @@ async def update_from_shfe(day: datetime.datetime):
                             inst_data['PRESETTLEMENTPRICE'],
                             'volume': inst_data['VOLUME'] if inst_data['VOLUME'] else 0,
                             'open_interest': inst_data['OPENINTEREST'] if inst_data['OPENINTEREST'] else 0})
+        return True
     except Exception as e:
-        print('update_from_shfe failed: %s' % e)
+        logger.error('update_from_shfe failed: %s', e, exc_info=True)
+        return False
 
 
-async def fetch_czce_page(session, url):
-    try:
-        await max_conn_czce.acquire()
-        rst = None
-        async with session.get(url) as response:
-            if response.status == 200:
-                rst = await response.text(encoding='gbk')
-        max_conn_czce.release()
-        return rst
-    except Exception as e:
-        print('fetch_czce_page failed: %s' % e)
-
-
-async def update_from_czce(day: datetime.datetime):
+async def update_from_czce(day: datetime.datetime) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             day_str = day.strftime('%Y%m%d')
-            rst = await fetch_czce_page(
-                session, 'http://{}/portal/DFSStaticFiles/Future/{}/{}/FutureDataDaily.txt'.format(
-                    czce_ip, day.year, day_str))
-            if rst is None:
-                rst = await fetch_czce_page(
-                    session, 'http://{}/portal/exchange/{}/datadaily/{}.txt'.format(
-                        czce_ip, day.year, day_str))
-            for lines in rst.split('\r\n')[1:-3]:
-                if '小计' in lines or '品种' in lines:
-                    continue
-                inst_data = [x.strip() for x in lines.split('|' if '|' in lines else ',')]
-                # error_data = inst_data
-                """
-    [0'品种月份', 1'昨结算', 2'今开盘', 3'最高价', 4'最低价', 5'今收盘', 6'今结算', 7'涨跌1', 8'涨跌2', 9'成交量(手)', 10'空盘量', 11'增减量', 12'成交额(万元)', 13'交割结算价']
-    ['CF601', '11,970.00', '11,970.00', '11,970.00', '11,800.00', '11,870.00', '11,905.00', '-100.00',
-    '-65.00', '13,826', '59,140', '-10,760', '82,305.24', '']
-                """
-                close = inst_data[5].replace(',', '') if Decimal(inst_data[5].replace(',', '')) > 0.1 \
-                    else inst_data[6].replace(',', '')
-                DailyBar.objects.update_or_create(
-                    code=inst_data[0],
-                    exchange=ExchangeType.CZCE, time=day, defaults={
-                        'expire_date': get_expire_date(inst_data[0], day),
-                        'open': inst_data[2].replace(',', '') if Decimal(inst_data[2].replace(',', '')) > 0.1
-                        else close,
-                        'high': inst_data[3].replace(',', '') if Decimal(inst_data[3].replace(',', '')) > 0.1
-                        else close,
-                        'low': inst_data[4].replace(',', '') if Decimal(inst_data[4].replace(',', '')) > 0.1
-                        else close,
-                        'close': close,
-                        'settlement': inst_data[6].replace(',', '') if Decimal(inst_data[6].replace(',', '')) > 0.1 else
-                        inst_data[1].replace(',', ''),
-                        'volume': inst_data[9].replace(',', ''),
-                        'open_interest': inst_data[10].replace(',', '')})
+            async with session.get(
+                    f'http://{czce_ip}/cn/DFSStaticFiles/Future/{day.year}/{day_str}/FutureDataDaily.txt') as response:
+                rst = await response.text()
+                for lines in rst.split('\n')[1:-3]:
+                    if '小计' in lines or '合约' in lines or '品种' in lines:
+                        continue
+                    inst_data = [x.strip() for x in lines.split('|' if '|' in lines else ',')]
+                    """
+        [0'合约代码', 1'昨结算', 2'今开盘', 3'最高价', 4'最低价', 5'今收盘', 6'今结算', 7'涨跌1', 8'涨跌2', 9'成交量(手)', 
+         10'持仓量', 11'增减量', 12'成交额(万元)', 13'交割结算价']
+        ['CF601', '11,970.00', '11,970.00', '11,970.00', '11,800.00', '11,870.00', '11,905.00', '-100.00',
+         '-65.00', '13,826', '59,140', '-10,760', '82,305.24', '']
+                    """
+                    # print(f'inst_data: {inst_data}')
+                    close = inst_data[5].replace(',', '') if Decimal(inst_data[5].replace(',', '')) > 0.1 \
+                        else inst_data[6].replace(',', '')
+                    DailyBar.objects.update_or_create(
+                        code=inst_data[0],
+                        exchange=ExchangeType.CZCE, time=day, defaults={
+                            'expire_date': get_expire_date(inst_data[0], day),
+                            'open': inst_data[2].replace(',', '') if Decimal(inst_data[2].replace(',', '')) > 0.1
+                            else close,
+                            'high': inst_data[3].replace(',', '') if Decimal(inst_data[3].replace(',', '')) > 0.1
+                            else close,
+                            'low': inst_data[4].replace(',', '') if Decimal(inst_data[4].replace(',', '')) > 0.1
+                            else close,
+                            'close': close,
+                            'settlement': inst_data[6].replace(',', '') if Decimal(inst_data[6].replace(',', '')) > 0.1 else
+                            inst_data[1].replace(',', ''),
+                            'volume': inst_data[9].replace(',', ''),
+                            'open_interest': inst_data[10].replace(',', '')})
+                return True
     except Exception as e:
-        print('update_from_czce failed: %s' % e)
+        logger.error('update_from_czce failed: %s', e, exc_info=True)
+        return False
 
 
-async def update_from_dce(day: datetime.datetime):
+async def update_from_dce(day: datetime.datetime) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             await max_conn_dce.acquire()
-            async with session.post('http://{}/publicweb/quotesdata/exportDayQuotesChData.html'.format(dce_ip), data={
-                    'dayQuotes.variety': 'all', 'dayQuotes.trade_type': 0, 'exportFlag': 'txt'}) as response:
+            async with session.post(f'http://{dce_ip}/publicweb/quotesdata/exportDayQuotesChData.html', data={
+                    'dayQuotes.variety': 'all', 'dayQuotes.trade_type': 0, 'exportFlag': 'txt',
+                    'year': day.year, 'month': day.month-1, 'day': day.day}) as response:
                 rst = await response.text()
                 max_conn_dce.release()
                 for lines in rst.split('\r\n')[1:-3]:
@@ -234,41 +231,44 @@ async def update_from_dce(day: datetime.datetime):
                             inst_data[6].replace(',', ''),
                             'volume': inst_data[10].replace(',', ''),
                             'open_interest': inst_data[11].replace(',', '')})
+                return True
     except Exception as e:
-        print('update_from_dce failed: %s' % e)
+        logger.error('update_from_dce failed: %s', e, exc_info=True)
+        return False
 
 
-async def update_from_cffex(day: datetime.datetime):
+async def update_from_cffex(day: datetime.datetime) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             await max_conn_cffex.acquire()
-            async with session.get('http://{}/fzjy/mrhq/{}/index.xml'.format(
-                    cffex_ip, day.strftime('%Y%m/%d'))) as response:
+            async with session.get(f"http://{cffex_ip}/fzjy/mrhq/{day.strftime('%Y%m/%d')}/index.xml") as response:
                 rst = await response.text()
                 max_conn_cffex.release()
                 tree = ET.fromstring(rst)
-                for inst_data in tree.getchildren():
+                for inst_data in tree:
                     """
                     <dailydata>
-                    <instrumentid>IC1609</instrumentid>
-                    <tradingday>20160824</tradingday>
-                    <openprice>6336.8</openprice>
-                    <highestprice>6364.4</highestprice>
-                    <lowestprice>6295.6</lowestprice>
-                    <closeprice>6314.2</closeprice>
-                    <openinterest>24703.0</openinterest>
-                    <presettlementprice>6296.6</presettlementprice>
-                    <settlementpriceIF>6317.6</settlementpriceIF>
-                    <settlementprice>6317.6</settlementprice>
-                    <volume>10619</volume>
-                    <turnover>1.3440868E10</turnover>
+                    <instrumentid>IC2112</instrumentid>
+                    <tradingday>20211209</tradingday>
+                    <openprice>7272</openprice>
+                    <highestprice>7330</highestprice>
+                    <lowestprice>7264.4</lowestprice>
+                    <closeprice>7302.4</closeprice>
+                    <preopeninterest>107546</preopeninterest>
+                    <openinterest>101956</openinterest>
+                    <presettlementprice>7274.4</presettlementprice>
+                    <settlementpriceif>7314.2</settlementpriceif>
+                    <settlementprice>7314.2</settlementprice>
+                    <volume>51752</volume>
+                    <turnover>75570943720</turnover>
                     <productid>IC</productid>
                     <delta/>
-                    <segma/>
-                    <expiredate>20160919</expiredate>
+                    <expiredate>20211217</expiredate>
                     </dailydata>
                     """
-                    # error_data = list(inst_data.itertext())
+                    # 不存储期权合约
+                    if len(inst_data.findtext('instrumentid').strip()) > 6:
+                        continue
                     DailyBar.objects.update_or_create(
                         code=inst_data.findtext('instrumentid').strip(),
                         exchange=ExchangeType.CFFEX, time=day, defaults={
@@ -285,17 +285,19 @@ async def update_from_cffex(day: datetime.datetime):
                             inst_data.findtext('presettlementprice').replace(',', ''),
                             'volume': inst_data.findtext('volume').replace(',', ''),
                             'open_interest': inst_data.findtext('openinterest').replace(',', '')})
+                return True
     except Exception as e:
-        print('update_from_cffex failed: %s' % e)
+        logger.error('update_from_cffex failed: %s', e, exc_info=True)
+        return False
 
 
 async def update_from_sina(day: datetime.datetime, inst: Instrument):
     try:
         async with aiohttp.ClientSession() as session:
             await max_conn_sina.acquire()
-            async with session.get('http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php'
+            async with session.get(f'http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php'
                                    '/Market_Center.getHQFuturesData?page=1&num=20&sort=position&asc=0&'
-                                   'node={}&base=futures'.format(inst.sina_code)) as response:
+                                   'node={inst.sina_code}&base=futures') as response:
                 print('获取', inst)
                 rst = await response.text()
                 max_conn_sina.release()
@@ -537,7 +539,7 @@ def nCr(n, r):
     return f(n) / f(r) / f(n-r)
 
 
-def find_best_score(n: int=20):
+def find_best_score(n: int = 20):
     """
     一秒钟算5个组合，要算100年..
     """

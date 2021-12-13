@@ -23,6 +23,7 @@ elif sys.platform == 'win32':
 else:
     sys.path.append('/home/cyh/bigbrother/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
+os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
 import asyncio
 from trader.strategy.brother2 import TradeStrategy
@@ -32,8 +33,10 @@ import trader.utils.logger as my_logger
 logger = my_logger.get_logger('main')
 
 
-def main():
-    loop = asyncio.get_event_loop()
+if __name__ == '__main__':
+    loop = asyncio.new_event_loop()
+    loop.set_debug(True)
+    asyncio.set_event_loop(loop)
     big_brother = None
     try:
         pid_path = os.path.join(app_dir.user_cache_dir, 'trader.pid')
@@ -57,6 +60,3 @@ def main():
         big_brother and loop.run_until_complete(big_brother.uninstall())
         logger.info('程序已退出')
 
-
-if __name__ == '__main__':
-    main()

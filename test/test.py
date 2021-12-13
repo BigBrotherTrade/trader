@@ -1,40 +1,44 @@
+import aioredis
 import asyncio
 
-import async_timeout
 
-import aioredis
-
-STOPWORD = "STOP"
+async def reader(message):
+    print(f"in reader: {message}, type={type(message)}")
 
 
-async def reader(channel: aioredis.client.PubSub):
-    while True:
-        try:
-            async with async_timeout.timeout(1):
-                message = await channel.get_message(ignore_subscribe_messages=True)
-                if message is not None:
-                    print(f"(Reader) Message Received: {message}, type={type(message)}")
-                    if message["data"] == STOPWORD:
-                        print("(Reader) STOP")
-                        break
-                await asyncio.sleep(0.01)
-        except asyncio.TimeoutError:
-            pass
+async def monitor1(pb: aioredis.client.PubSub):
+    async for msg in pb.listen():
+        print(f"in monitor1: {msg}, type={type(msg)}")
+        asyncio.create_task(reader(msg))
+        if msg['type'] == 'punsubscribe':
+            print('quit monitor1')
+            break
 
 
 async def main():
     redis = await aioredis.from_url("redis://192.168.123.142", decode_responses=True)
-    pubsub = redis.pubsub()
-    await pubsub.psubscribe("channel:*")
-
-    future = asyncio.create_task(reader(pubsub))
-
-    await redis.publish("channel:1", "Hello")
-    await redis.publish("channel:2", "World")
-    await redis.publish("channel:1", STOPWORD)
-
-    await future
-
+    pubsub1 = redis.pubsub()
+    pubsub2 = redis.pubsub()
+    await pubsub1.psubscribe('channel:*')
+    await pubsub2.psubscribe('channel*')
+    await redis.publish("channel:1", "1")
+    await redis.publish("channel:2", "6")
+    await redis.publish("channel:3", "3")
+    await pubsub1.punsubscribe()
+    await pubsub2.punsubscribe()
+    loop = asyncio.get_running_loop()
+    asyncio.run_coroutine_threadsafe(monitor1(pubsub1), loop)
+    asyncio.run_coroutine_threadsafe(monitor1(pubsub2), loop)
+    # await asyncio.gather(monitor1(pubsub1), monitor1(pubsub2))
+    # await pubsub2.run()
+    print('main done!')
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.create_task(main())
+        loop.run_forever()
+    except KeyboardInterrupt:
+        pass
+

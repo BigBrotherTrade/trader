@@ -92,7 +92,8 @@ class TradeStrategy(BaseModule):
         self.__broker.current = self.__current
         self.__broker.pre_balance = self.__pre_balance
         self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
-        logger.info("可用资金: {:,.0f} 静态权益: {:,.0f} 动态权益: {:,.0f}".format(self.__cash, self.__pre_balance, self.__current))
+        logger.info("可用资金: {:,.0f} 静态权益: {:,.0f} 动态权益: {:,.0f}".format(
+            self.__cash, self.__pre_balance, self.__current))
         self.__strategy = self.__broker.strategy_set.first()
         self.__inst_ids = [inst.product_code for inst in self.__strategy.instruments.all()]
 
@@ -120,48 +121,42 @@ class TradeStrategy(BaseModule):
 
     def update_position(self):
         for _, pos in self.__shares.items():
-            inst = Instrument.objects.filter(
-                exchange=pos['ExchangeID'],
-                product_code=re.findall('[A-Za-z]+', pos['InstrumentID'])[0]).first()
-            tick = json.loads(self.redis_client.get(pos['InstrumentID']))
-            if pos['Direction'] == ApiStruct.D_Buy:
-                profit = Decimal(tick['LastPrice']) - Decimal(pos['OpenPrice'])
-            else:
-                profit = Decimal(pos['OpenPrice']) - Decimal(tick['LastPrice'])
-            profit = profit * Decimal(pos['Volume']) * inst.volume_multiple
-            Trade.objects.update_or_create(
-                broker=self.__broker, strategy=self.__strategy, instrument=inst,
-                code=pos['InstrumentID'],
-                direction=DirectionType.LONG if pos['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
-                close_time__isnull=True,
-                defaults={
-                    'open_time': datetime.datetime.strptime(
-                        pos['OpenDate']+'09', '%Y%m%d%H').replace(tzinfo=pytz.FixedOffset(480)),
-                    'shares': pos['Volume'], 'filled_shares': pos['Volume'],
-                    'avg_entry_price': Decimal(pos['OpenPrice']),
-                    'cost': pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money *
-                    inst.volume_multiple + pos['Volume'] * inst.fee_volume,
-                    'profit': profit, 'frozen_margin': Decimal(pos['Margin'])})
-
-    @staticmethod
-    async def query_reader(ch: aioredis.client.PubSub, cb: asyncio.Future):
-        msg_list = []
-        while await ch.listen():
-            _, msg = await ch.get_message(ignore_subscribe_messages=True)
-            msg_dict = json.loads(msg)
-            if 'empty' in msg_dict:
-                if msg_dict['empty'] is False:
-                    msg_list.append(msg_dict)
-            else:
-                msg_list.append(msg_dict)
-            if ('bIsLast' not in msg_dict or msg_dict['bIsLast']) and not cb.done():
-                cb.set_result(msg_list)
+            try:
+                p_code = re.findall('[A-Za-z]+', pos['InstrumentID'])[0]
+                inst = Instrument.objects.filter(
+                    exchange=pos['ExchangeID'],
+                    product_code=p_code).first()
+                raw_tick = self.raw_redis.get(pos['InstrumentID'])
+                tick = json.loads(raw_tick)
+                if pos['Direction'] == ApiStruct.D_Buy:
+                    profit = Decimal(tick['LastPrice']) - Decimal(pos['OpenPrice'])
+                else:
+                    profit = Decimal(pos['OpenPrice']) - Decimal(tick['LastPrice'])
+                profit = profit * Decimal(pos['Volume']) * inst.volume_multiple
+                Trade.objects.update_or_create(
+                    broker=self.__broker, strategy=self.__strategy, instrument=inst,
+                    code=pos['InstrumentID'],
+                    direction=DirectionType.LONG if pos['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
+                    close_time__isnull=True,
+                    defaults={
+                        'open_time': datetime.datetime.strptime(
+                            pos['OpenDate']+'09', '%Y%m%d%H').replace(tzinfo=pytz.FixedOffset(480)),
+                        'shares': pos['Volume'], 'filled_shares': pos['Volume'],
+                        'avg_entry_price': Decimal(pos['OpenPrice']),
+                        'cost': pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money *
+                        inst.volume_multiple + pos['Volume'] * inst.fee_volume,
+                        'profit': profit, 'frozen_margin': Decimal(pos['Margin'])})
+            except Exception as ee:
+                logger.info('发生错误: %s', repr(ee), exc_info=True)
+                continue
 
     async def start(self):
-        self.redis_client.set('HEARTBEAT:TRADER', 1, ex=61)
+        self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=61)
         await self.query('TradingAccount')
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
+        await self.refresh_instrument()
+
         # await self.collect_tick_stop()
         # await self.collect_quote()
         # day = datetime.datetime.strptime('20161031', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
@@ -211,95 +206,87 @@ class TradeStrategy(BaseModule):
     def async_query(self, query_type: str, **kwargs):
         request_id = self.next_id()
         kwargs['RequestID'] = request_id
-        self.redis_client.publish(self.__request_format.format('ReqQry' + query_type), json.dumps(kwargs))
+        self.raw_redis.publish(self.__request_format.format('ReqQry' + query_type), json.dumps(kwargs))
+
+    @staticmethod
+    async def query_reader(pb: aioredis.client.PubSub):
+        msg_list = []
+        async for msg in pb.listen():
+            msg_dict = json.loads(msg['data'])
+            if 'empty' in msg_dict:
+                if msg_dict['empty'] is False:
+                    msg_list.append(msg_dict)
+            else:
+                msg_list.append(msg_dict)
+            if 'bIsLast' not in msg_dict or msg_dict['bIsLast']:
+                return msg_list
 
     async def query(self, query_type: str, **kwargs):
         sub_client = None
-        channel_name1, channel_name2 = None, None
+        channel_rsp_qry, channel_rsp_err = None, None
         try:
-            sub_client = await aioredis.create_redis(
-                (config.get('REDIS', 'host', fallback='localhost'),
-                 config.getint('REDIS', 'port', fallback=6379)),
-                db=config.getint('REDIS', 'db', fallback=1))
+            sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
             request_id = self.next_id()
             kwargs['RequestID'] = request_id
-            channel_name1 = self.__trade_response_format.format('OnRspQry' + query_type, request_id)
-            channel_name2 = self.__trade_response_format.format('OnRspError', request_id)
-            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
-            cb = self.io_loop.create_future()
-            tasks = [
-                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
-                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
-            ]
-            self.redis_client.publish(self.__request_format.format('ReqQry' + query_type), json.dumps(kwargs))
-            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
-            await sub_client.punsubscribe(channel_name1, channel_name2)
-            sub_client.close()
-            await asyncio.wait(tasks, loop=self.io_loop)
-            return rst
+            channel_rsp_qry = self.__trade_response_format.format('OnRspQry' + query_type, request_id)
+            channel_rsp_err = self.__trade_response_format.format('OnRspError', request_id)
+            await sub_client.psubscribe(channel_rsp_qry, channel_rsp_err)
+            task = asyncio.create_task(self.query_reader(sub_client))
+            self.raw_redis.publish(self.__request_format.format('ReqQry' + query_type), json.dumps(kwargs))
+            await asyncio.wait_for(task, HANDLER_TIME_OUT)
+            await sub_client.punsubscribe()
+            await sub_client.close()
+            return task.result()
+
         except Exception as e:
             logger.error('%s failed: %s', query_type, repr(e), exc_info=True)
-            if sub_client and sub_client.in_pubsub and channel_name1:
-                await sub_client.unsubscribe(channel_name1, channel_name2)
-                sub_client.close()
+            if sub_client and channel_rsp_qry:
+                await sub_client.unsubscribe()
+                await sub_client.close()
             return None
 
     async def SubscribeMarketData(self, inst_ids: list):
         sub_client = None
-        channel_name1, channel_name2 = None, None
+        channel_rsp_dat, channel_rsp_err = None, None
         try:
-            sub_client = await aioredis.create_redis(
-                (config.get('REDIS', 'host', fallback='localhost'),
-                 config.getint('REDIS', 'port', fallback=6379)),
-                db=config.getint('REDIS', 'db', fallback=1))
-            channel_name1 = self.__market_response_format.format('OnRspSubMarketData', 0)
-            channel_name2 = self.__market_response_format.format('OnRspError', 0)
-            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
-            cb = self.io_loop.create_future()
-            tasks = [
-                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
-                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
-            ]
-            self.redis_client.publish(self.__request_format.format('SubscribeMarketData'), json.dumps(inst_ids))
-            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
-            await sub_client.punsubscribe(channel_name1, channel_name2)
-            sub_client.close()
-            await asyncio.wait(tasks, loop=self.io_loop)
-            return rst
+            sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
+            channel_rsp_dat = self.__market_response_format.format('OnRspSubMarketData', 0)
+            channel_rsp_err = self.__market_response_format.format('OnRspError', 0)
+            await sub_client.psubscribe(channel_rsp_dat, channel_rsp_err)
+            task = asyncio.create_task(self.query_reader(sub_client))
+            self.raw_redis.publish(self.__request_format.format('SubscribeMarketData'), json.dumps(inst_ids))
+            await asyncio.wait_for(task, HANDLER_TIME_OUT)
+            await sub_client.punsubscribe()
+            await sub_client.close()
+            return task.result()
+
         except Exception as e:
             logger.error('SubscribeMarketData failed: %s', repr(e), exc_info=True)
-            if sub_client and sub_client.in_pubsub and channel_name1:
-                await sub_client.unsubscribe(channel_name1, channel_name2)
-                sub_client.close()
+            if sub_client and sub_client.in_pubsub and channel_rsp_dat:
+                await sub_client.unsubscribe()
+                await sub_client.close()
             return None
 
     async def UnSubscribeMarketData(self, inst_ids: list):
         sub_client = None
-        channel_name1, channel_name2 = None, None
+        channel_rsp_dat, channel_rsp_err = None, None
         try:
-            sub_client = await aioredis.create_redis(
-                (config.get('REDIS', 'host', fallback='localhost'),
-                 config.getint('REDIS', 'port', fallback=6379)),
-                db=config.getint('REDIS', 'db', fallback=1))
-            channel_name1 = self.__market_response_format.format('OnRspUnSubMarketData', 0)
-            channel_name2 = self.__market_response_format.format('OnRspError', 0)
-            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
-            cb = self.io_loop.create_future()
-            tasks = [
-                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
-                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
-            ]
-            self.redis_client.publish(self.__request_format.format('UnSubscribeMarketData'), json.dumps(inst_ids))
-            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
-            await sub_client.punsubscribe(channel_name1, channel_name2)
-            sub_client.close()
-            await asyncio.wait(tasks, loop=self.io_loop)
-            return rst
+            sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
+            channel_rsp_dat = self.__market_response_format.format('OnRspUnSubMarketData', 0)
+            channel_rsp_err = self.__market_response_format.format('OnRspError', 0)
+            await sub_client.psubscribe(channel_rsp_dat, channel_rsp_err)
+            task = asyncio.create_task(self.query_reader(sub_client))
+            self.raw_redis.publish(self.__request_format.format('UnSubscribeMarketData'), json.dumps(inst_ids))
+            await asyncio.wait_for(task, HANDLER_TIME_OUT)
+            await sub_client.punsubscribe()
+            await sub_client.close()
+            return task.result()
+
         except Exception as e:
-            logger.error('SubscribeMarketData failed: %s', repr(e), exc_info=True)
-            if sub_client and sub_client.in_pubsub and channel_name1:
-                await sub_client.unsubscribe(channel_name1, channel_name2)
-                sub_client.close()
+            logger.error('UnSubscribeMarketData failed: %s', repr(e), exc_info=True)
+            if sub_client and sub_client.in_pubsub and channel_rsp_dat:
+                await sub_client.unsubscribe()
+                await sub_client.close()
             return None
 
     async def buy(self, inst: Instrument, limit_price: Decimal, volume: int):
@@ -368,69 +355,53 @@ class TradeStrategy(BaseModule):
         TimeCondition 持续时间
         """
         sub_client = None
-        channel_name1, channel_name2 = None, None
+        channel_rtn_odr, channel_rsp_err = None, None
         try:
-            sub_client = await aioredis.create_redis(
-                (config.get('REDIS', 'host', fallback='localhost'),
-                 config.getint('REDIS', 'port', fallback=6379)),
-                db=config.getint('REDIS', 'db', fallback=1))
+            sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
             request_id = self.next_id()
             order_ref = self.next_order_ref()
             kwargs['nRequestId'] = request_id
             kwargs['OrderRef'] = order_ref
-            channel_name1 = self.__trade_response_format.format('OnRtnOrder', order_ref)
-            channel_name2 = self.__trade_response_format.format('OnRspError', request_id)
-            channel_name3 = self.__trade_response_format.format('OnRspOrderInsert', 0)
-            ch1, ch2, ch3 = await sub_client.psubscribe(channel_name1, channel_name2, channel_name3)
-            cb = self.io_loop.create_future()
-            tasks = [
-                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
-                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
-                asyncio.ensure_future(self.query_reader(ch3, cb), loop=self.io_loop),
-            ]
-            self.redis_client.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(kwargs))
-            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
-            await sub_client.punsubscribe(channel_name1, channel_name2, channel_name3)
-            sub_client.close()
-            await asyncio.wait(tasks, loop=self.io_loop)
-            logger.info('ReqOrderInsert, rst: %s', rst)
-            return rst
+            channel_rtn_odr = self.__trade_response_format.format('OnRtnOrder', order_ref)
+            channel_rsp_err = self.__trade_response_format.format('OnRspError', request_id)
+            channel_rsp_odr = self.__trade_response_format.format('OnRspOrderInsert', 0)
+            await sub_client.psubscribe(channel_rtn_odr, channel_rsp_err, channel_rsp_odr)
+            task = asyncio.create_task(self.query_reader(sub_client))
+            self.raw_redis.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(kwargs))
+            await asyncio.wait_for(task, HANDLER_TIME_OUT)
+            await sub_client.punsubscribe()
+            await sub_client.close()
+            logger.info('ReqOrderInsert, rst: %s', task.result())
+            return task.result()
         except Exception as e:
             logger.error('ReqOrderInsert failed: %s', repr(e), exc_info=True)
-            if sub_client and sub_client.in_pubsub and channel_name1:
-                await sub_client.unsubscribe(channel_name1, channel_name2)
-                sub_client.close()
+            if sub_client and sub_client.in_pubsub and channel_rtn_odr:
+                await sub_client.unsubscribe()
+                await sub_client.close()
             return None
 
     async def cancel_order(self, order: dict):
         sub_client = None
-        channel_name1, channel_name2 = None, None
+        channel_rsp_odr, channel_rsp_err = None, None
         try:
-            sub_client = await aioredis.create_redis(
-                (config.get('REDIS', 'host', fallback='localhost'),
-                 config.getint('REDIS', 'port', fallback=6379)),
-                db=config.getint('REDIS', 'db', fallback=1))
+            sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
             request_id = self.next_id()
             order['nRequestId'] = request_id
-            channel_name1 = self.__trade_response_format.format('OnRspOrderAction', request_id)
-            channel_name2 = self.__trade_response_format.format('OnRspError', request_id)
-            ch1, ch2 = await sub_client.psubscribe(channel_name1, channel_name2)
-            cb = self.io_loop.create_future()
-            tasks = [
-                asyncio.ensure_future(self.query_reader(ch1, cb), loop=self.io_loop),
-                asyncio.ensure_future(self.query_reader(ch2, cb), loop=self.io_loop),
-            ]
-            self.redis_client.publish(self.__request_format.format('ReqOrderAction'), json.dumps(order))
-            rst = await asyncio.wait_for(cb, HANDLER_TIME_OUT, loop=self.io_loop)
-            await sub_client.punsubscribe(channel_name1, channel_name2)
-            sub_client.close()
-            await asyncio.wait(tasks, loop=self.io_loop)
-            return rst
+            channel_rsp_odr = self.__trade_response_format.format('OnRspOrderAction', request_id)
+            channel_rsp_err = self.__trade_response_format.format('OnRspError', request_id)
+            await sub_client.psubscribe(channel_rsp_odr, channel_rsp_err)
+            task = asyncio.create_task(self.query_reader(sub_client))
+            self.raw_redis.publish(self.__request_format.format('ReqOrderAction'), json.dumps(order))
+            await asyncio.wait_for(task, HANDLER_TIME_OUT)
+            await sub_client.punsubscribe()
+            await sub_client.close()
+            return task.result()
+
         except Exception as e:
             logger.error('ReqOrderInsert failed: %s', repr(e), exc_info=True)
-            if sub_client and sub_client.in_pubsub and channel_name1:
-                await sub_client.unsubscribe(channel_name1, channel_name2)
-                sub_client.close()
+            if sub_client and sub_client.in_pubsub and channel_rsp_odr:
+                await sub_client.unsubscribe()
+                await sub_client.close()
             return None
 
     # @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
@@ -653,7 +624,7 @@ class TradeStrategy(BaseModule):
 
     @param_function(crontab='*/1 * * * *')
     async def heartbeat(self):
-        self.redis_client.set('HEARTBEAT:TRADER', 1, ex=301)
+        self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=301)
 
     @param_function(crontab='55 8 * * * 5')
     async def processing_signal1(self):
@@ -749,11 +720,11 @@ class TradeStrategy(BaseModule):
         logger.info('更新合约列表..')
         inst_set = defaultdict(set)
         inst_dict = defaultdict(dict)
-        regex = re.compile('(.*?)([0-9]+)$')
+        regex = re.compile('(.*?)([0-9]+)(.*?)$')
         inst_list = await self.query('Instrument')
         for inst in inst_list:
             if not inst['empty']:
-                if inst['IsTrading'] == 1:
+                if inst['IsTrading'] == 1 and inst['ProductClass'] == ApiStruct.PC_Futures and inst['StrikePrice'] == 0:
                     inst_set[inst['ProductID']].add(inst['InstrumentID'])
                     inst_dict[inst['ProductID']]['exchange'] = inst['ExchangeID']
                     inst_dict[inst['ProductID']]['product_code'] = inst['ProductID']
@@ -761,13 +732,18 @@ class TradeStrategy(BaseModule):
                     inst_dict[inst['ProductID']]['price_tick'] = inst['PriceTick']
                     inst_dict[inst['ProductID']]['margin'] = inst['LongMarginRatio']
                     if 'name' not in inst_dict[inst['ProductID']]:
-                        inst_dict[inst['ProductID']]['name'] = regex.match(inst['InstrumentName']).group(1)
+                        valid_name = regex.match(inst['InstrumentName'])
+                        if valid_name is not None:
+                            valid_name = valid_name.group(1)
+                        else:
+                            valid_name = inst['InstrumentName']
+                        inst_dict[inst['ProductID']]['name'] = valid_name
         for code, data in inst_dict.items():
-            logger.info('更新合约保证金: %s', code)
+            all_inst = ','.join(sorted(inst_set[code]))
             inst, _ = Instrument.objects.update_or_create(product_code=code, defaults={
                 'exchange': data['exchange'],
                 'name': data['name'],
-                'all_inst': ','.join(sorted(inst_set[code])),
+                'all_inst': all_inst,
                 'volume_multiple': data['multiple'],
                 'price_tick': data['price_tick'],
                 'margin_rate': data['margin']
@@ -881,20 +857,28 @@ class TradeStrategy(BaseModule):
         更新每一个合约的手续费
         """
         try:
-            fee = (await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code))
+            main_code = inst.main_code
+            if main_code is None:
+                main_code = inst.all_inst.split(',')[0]
+            fee = await self.query('InstrumentCommissionRate', InstrumentID=main_code)
             if fee:
                 fee = fee[0]
                 inst.fee_money = Decimal(fee['CloseRatioByMoney'])
                 inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
-            tick = json.loads(self.redis_client.get(inst.main_code))
-            inst.up_limit_ratio = (Decimal(tick['UpperLimitPrice']) -
-                                   Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
-            inst.up_limit_ratio = round(inst.up_limit_ratio, 3)
-            inst.down_limit_ratio = (Decimal(tick['PreSettlementPrice']) -
-                                     Decimal(tick['LowerLimitPrice'])) / Decimal(tick['PreSettlementPrice'])
-            inst.down_limit_ratio = round(inst.down_limit_ratio, 3)
+            raw_tick = self.raw_redis.get(main_code)
+            if raw_tick is not None:
+                tick = json.loads(self.raw_redis.get(main_code))
+                inst.up_limit_ratio = (Decimal(tick['UpperLimitPrice']) -
+                                       Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
+                inst.up_limit_ratio = round(inst.up_limit_ratio, 3)
+                inst.down_limit_ratio = (Decimal(tick['PreSettlementPrice']) -
+                                         Decimal(tick['LowerLimitPrice'])) / Decimal(tick['PreSettlementPrice'])
+                inst.down_limit_ratio = round(inst.down_limit_ratio, 3)
+            else:
+                logger.error(f'update_inst_fee tick[{main_code}] not found!')
             inst.save(update_fields=['fee_money', 'fee_volume', 'margin_rate',
                                      'up_limit_ratio', 'down_limit_ratio'])
+            logger.info(f"更新合约手续费 {inst}")
         except Exception as e:
             logger.error('update_inst_fee failed: %s', e, exc_info=True)
 
@@ -1049,13 +1033,13 @@ class TradeStrategy(BaseModule):
         inst = signal.instrument
         if signal.type == SignalType.BUY:
             if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
+                tick = json.loads(self.raw_redis.get(signal.code))
                 price = tick['UpperLimitPrice']
             logger.info('%s 开多%s手 价格: %s', inst, signal.volume, price)
             self.io_loop.create_task(self.buy(inst, price, signal.volume))
         elif signal.type == SignalType.SELL_SHORT:
             if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
+                tick = json.loads(self.raw_redis.get(signal.code))
                 price = tick['LowerLimitPrice']
             logger.info('%s 开空%s手 价格: %s', inst, signal.volume, price)
             self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
@@ -1065,7 +1049,7 @@ class TradeStrategy(BaseModule):
                 code=signal.code, close_time__isnull=True, direction=DirectionType.SHORT,
                 instrument=inst, shares__gt=0).first()
             if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
+                tick = json.loads(self.raw_redis.get(signal.code))
                 price = tick['UpperLimitPrice']
             logger.info('%s 平空%s手 价格: %s', pos.instrument, signal.volume, price)
             self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
@@ -1075,7 +1059,7 @@ class TradeStrategy(BaseModule):
                 code=signal.code, close_time__isnull=True, direction=DirectionType.LONG,
                 instrument=inst, shares__gt=0).first()
             if use_tick:
-                tick = json.loads(self.redis_client.get(signal.code))
+                tick = json.loads(self.raw_redis.get(signal.code))
                 price = tick['LowerLimitPrice']
             logger.info('%s 平多%s手 价格: %s', pos.instrument, signal.volume, price)
             self.io_loop.create_task(self.sell(pos, price, signal.volume))
@@ -1086,13 +1070,13 @@ class TradeStrategy(BaseModule):
             if pos.direction == DirectionType.LONG:
                 logger.info('%s->%s 多头换月平旧%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
                 if use_tick:
-                    tick = json.loads(self.redis_client.get(signal.code))
+                    tick = json.loads(self.raw_redis.get(signal.code))
                     price = tick['LowerLimitPrice']
                 self.io_loop.create_task(self.sell(pos, price, signal.volume))
             else:
                 logger.info('%s->%s 空头换月平旧%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
                 if use_tick:
-                    tick = json.loads(self.redis_client.get(signal.code))
+                    tick = json.loads(self.raw_redis.get(signal.code))
                     price = tick['UpperLimitPrice']
                 self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
         elif signal.type == SignalType.ROLL_OPEN:
@@ -1102,19 +1086,19 @@ class TradeStrategy(BaseModule):
                 shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
             if pos.direction == DirectionType.LONG:
                 if use_tick:
-                    tick = json.loads(self.redis_client.get(signal.code))
+                    tick = json.loads(self.raw_redis.get(signal.code))
                     price = tick['UpperLimitPrice']
                 logger.info('%s->%s 多头换月开新%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
                 self.io_loop.create_task(self.buy(inst, price, signal.volume))
             else:
                 if use_tick:
-                    tick = json.loads(self.redis_client.get(signal.code))
+                    tick = json.loads(self.raw_redis.get(signal.code))
                     price = tick['LowerLimitPrice']
                 logger.info('%s->%s 空头换月开新%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
                 self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
 
     def calc_up_limit(self, inst: Instrument, bar: DailyBar):
-        tick = json.loads(self.redis_client.get(bar.code))
+        tick = json.loads(self.raw_redis.get(bar.code))
         ratio = (Decimal(tick['UpperLimitPrice']) -
                  Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
         ratio = Decimal(round(ratio, 3))
@@ -1122,7 +1106,7 @@ class TradeStrategy(BaseModule):
         return price - inst.price_tick
 
     def calc_down_limit(self, inst: Instrument, bar: DailyBar):
-        tick = json.loads(self.redis_client.get(bar.code))
+        tick = json.loads(self.raw_redis.get(bar.code))
         ratio = (Decimal(tick['PreSettlementPrice']) -
                  Decimal(tick['LowerLimitPrice'])) / Decimal(tick['PreSettlementPrice'])
         ratio = Decimal(round(ratio, 3))

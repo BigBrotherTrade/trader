@@ -9,21 +9,24 @@ import django
 
 if sys.platform == 'darwin':
     sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
+elif sys.platform == 'win32':
+    sys.path.append(r'D:\UserData\Documents\GitHub\dashboard')
 else:
     sys.path.append('/home/cyh/bigbrother/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
+os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
 from trader.utils import is_trading_day, update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, \
-    create_main_all, fetch_from_quandl_all, clean_daily_bar, load_kt_data, calc_his_all
+    create_main_all, fetch_from_quandl_all, clean_daily_bar, load_kt_data, calc_his_all, check_trading_day
 
 
 async def fetch_bar():
-    day = datetime.datetime.strptime('20100416', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
-    end = datetime.datetime.strptime('20160118', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+    day_end = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+    day_start = day_end - datetime.timedelta(days=365)
     tasks = []
-    while day <= end:
-        tasks.append(is_trading_day(day))
-        day += datetime.timedelta(days=1)
+    while day_start <= day_end:
+        tasks.append(check_trading_day(day_start))
+        day_start += datetime.timedelta(days=1)
     trading_days = []
     for f in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
         rst = await f
@@ -43,10 +46,10 @@ async def fetch_bar():
 
 
 async def fetch_bar2():
-    day = datetime.datetime.strptime('20160114', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
-    end = datetime.datetime.strptime('20160914', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
-    while day <= end:
-        day, trading = await is_trading_day(day)
+    day_end = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+    day_start = day_end - datetime.timedelta(days=365)
+    while day_start <= day_end:
+        day, trading = await check_trading_day(day_start)
         if trading:
             print('process ', day)
             tasks = [
@@ -56,13 +59,13 @@ async def fetch_bar2():
                 asyncio.ensure_future(update_from_cffex(day)),
             ]
             await asyncio.wait(tasks)
-        day += datetime.timedelta(days=1)
+        day_start += datetime.timedelta(days=1)
     print('all done!')
 
 
-# asyncio.get_event_loop().run_until_complete(fetch_bar2())
+asyncio.get_event_loop().run_until_complete(fetch_bar2())
 # create_main_all()
 # fetch_from_quandl_all()
 # clean_dailybar()
 # load_kt_data()
-calc_his_all(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
+# calc_his_all(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))

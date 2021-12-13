@@ -13,62 +13,43 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-
 import asynctest
-import redis
+import sys
+import os
+import django
+if sys.platform == 'darwin':
+    sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
+elif sys.platform == 'win32':
+    sys.path.append(r'D:\UserData\Documents\GitHub\dashboard')
+else:
+    sys.path.append('/home/cyh/bigbrother/dashboard')
+os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
+os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
+django.setup()
 
-from trader.strategy.ctp import CTPTrader
-
-try:
-    import ujson as json
-except ImportError:
-    import json
-
-import trader.utils.logger as my_logger
+from trader.utils import *
 from trader.utils.read_config import *
-
-logger = my_logger.get_logger('TestApi')
 
 
 class APITest(asynctest.TestCase):
-    loop = None  # make pycharm happy
-
     def setUp(self):
         self.redis_client = redis.StrictRedis(
             host=config.get('REDIS', 'host', fallback='localhost'),
             db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
-        self.api = CTPTrader(io_loop=self.loop)
+        self.redis_client.get("LastTradingDay")
+        self.last_trading_day = datetime.datetime.strptime(self.redis_client.get("LastTradingDay"), '%Y%m%d')
 
-    @asynctest.skip(reason='no need')
-    async def test_market_login(self):
-        rst = await self.api.MarketReqUserLogin(
-            broker_id=config.get('sim', 'broker'),
-            user_id=config.get('sim', 'investor'),
-            password=config.get('sim', 'passwd'),
-        )
-        logger.info('market_login rst = %s', rst)
-        self.assertIsNotNone(rst)
-        self.assertNotEqual(rst, 'failed')
+    def tearDown(self) -> None:
+        self.redis_client.close()
 
-    @asynctest.skip(reason='no need')
-    async def test_trade_login(self):
-        rst = await self.api.TradeReqUserLogin(
-            broker_id=config.get('sim', 'broker'),
-            user_id=config.get('sim', 'investor'),
-            password=config.get('sim', 'passwd'),
-        )
-        logger.info('trade_login rst = %s', rst)
-        self.assertIsNotNone(rst)
-        self.assertNotEqual(rst, 'failed')
+    async def test_get_shfe_data(self):
+        self.assertTrue(await update_from_shfe(self.last_trading_day))
 
-    async def test_subscribe(self):
-        rst = await self.api.SubscribeMarketData(["IF1608"])
-        logger.info('test_subscribe rst = %s', rst)
-        self.assertIsNotNone(rst)
-        self.assertNotEqual(rst, 'failed')
+    async def test_get_dce_data(self):
+        self.assertTrue(await update_from_dce(self.last_trading_day))
 
-    async def test_unsubscribe(self):
-        rst = await self.api.UnSubscribeMarketData(["IF1608"])
-        logger.info('test_unsubscribe rst = %s', rst)
-        self.assertIsNotNone(rst)
-        self.assertNotEqual(rst, 'failed')
+    async def test_get_czce_data(self):
+        self.assertTrue(await update_from_czce(self.last_trading_day))
+
+    async def test_get_cffex_data(self):
+        self.assertTrue(await update_from_cffex(self.last_trading_day))

@@ -47,6 +47,9 @@ password = 123456
 [QuantDL]
 api_key = 123456
 
+[Tushare]
+token = 123456
+
 [LOG]
 level = INFO
 format = %(asctime)s %(name)s [%(levelname)s] %(message)s
