@@ -26,11 +26,11 @@ import asyncio
 from abc import abstractmethod, ABCMeta
 import aioredis
 
-import trader.utils.logger as my_logger
+from trader.utils.my_logger import get_my_logger
 from trader.utils.func_container import ParamFunctionContainer
 from trader.utils.read_config import *
 
-logger = my_logger.get_logger('BaseModule')
+logger = get_my_logger('BaseModule')
 
 
 class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):

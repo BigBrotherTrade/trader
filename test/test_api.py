@@ -45,11 +45,14 @@ class APITest(asynctest.TestCase):
     async def test_get_shfe_data(self):
         self.assertTrue(await update_from_shfe(self.last_trading_day))
 
-    async def test_get_dce_data(self):
-        self.assertTrue(await update_from_dce(self.last_trading_day))
-
-    async def test_get_czce_data(self):
-        self.assertTrue(await update_from_czce(self.last_trading_day))
-
-    async def test_get_cffex_data(self):
-        self.assertTrue(await update_from_cffex(self.last_trading_day))
+    # async def test_get_dce_data(self):
+    #     self.assertTrue(await update_from_dce(self.last_trading_day))
+    #
+    # async def test_get_czce_data(self):
+    #     self.assertTrue(await update_from_czce(self.last_trading_day))
+    #
+    # async def test_get_cffex_data(self):
+    #     self.assertTrue(await update_from_cffex(self.last_trading_day))
+    #
+    # async def test_get_contracts_argument(self):
+    #     self.assertTrue(await get_contracts_argument(self.last_trading_day))

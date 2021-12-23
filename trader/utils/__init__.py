@@ -37,9 +37,9 @@ from tqdm import tqdm
 from panel.models import *
 from trader.utils import ApiStruct
 from trader.utils.read_config import config
-from trader.utils import logger as my_logger
+from trader.utils.my_logger import get_my_logger
 
-logger = my_logger.get_logger('trade.utils')
+logger = get_my_logger('trade.utils')
 
 max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
@@ -119,6 +119,7 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
                 rst = await response.read()
                 rst_json = json.loads(rst)
                 max_conn_shfe.release()
+                inst_name_dict = {}
                 for inst_data in rst_json['o_curinstrument']:
                     """
         {"PRODUCTID":"cu_f    ","PRODUCTGROUPID":"cu      ","PRODUCTSORTNO":10,"PRODUCTNAME":"铜                  ",
@@ -132,8 +133,12 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
                     if '_f' not in inst_data['PRODUCTID']:
                         continue
                     # logger.info(f'inst_data: {inst_data}')
+                    code = inst_data['PRODUCTGROUPID'].strip()
+                    name = inst_data['PRODUCTNAME'].strip()
+                    if code not in inst_name_dict:
+                        inst_name_dict[code] = name
                     DailyBar.objects.update_or_create(
-                        code=inst_data['PRODUCTID'].split('_')[0] + inst_data['DELIVERYMONTH'],
+                        code=code + inst_data['DELIVERYMONTH'],
                         exchange=ExchangeType.SHFE, time=day, defaults={
                             'expire_date': inst_data['DELIVERYMONTH'],
                             'open': inst_data['OPENPRICE'] if inst_data['OPENPRICE'] else inst_data['CLOSEPRICE'],
@@ -146,6 +151,9 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
                             inst_data['PRESETTLEMENTPRICE'],
                             'volume': inst_data['VOLUME'] if inst_data['VOLUME'] else 0,
                             'open_interest': inst_data['OPENINTEREST'] if inst_data['OPENINTEREST'] else 0})
+                # 更新上期所合约中文名称
+                for code, name in inst_name_dict.items():
+                    Instrument.objects.filter(product_code=code).update(name=name)
         return True
     except Exception as e:
         logger.error('update_from_shfe failed: %s', e, exc_info=True)
@@ -349,7 +357,7 @@ def handle_rollover(inst: Instrument, new_bar: DailyBar):
     main_bar.basis = basis
     basis = float(basis)
     main_bar.save(update_fields=['basis'])
-    MainBar.objects.filter(exchange=inst.exchange, product_code=product_code, time__lte=new_bar.time).update(
+    MainBar.objects.filter(exchange=inst.exchange, product_code=product_code, time__lt=new_bar.time).update(
         open=F('open') + basis, high=F('high') + basis,
         low=F('low') + basis, close=F('close') + basis, settlement=F('settlement') + basis)
 
@@ -393,6 +401,8 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
                 expire_date__gte=expire_date, time=day.date()).order_by(
                 '-volume', '-open_interest', 'code').first()
+            if check_bar is None:
+                logger.error(f"calc_main_inst 未找到主力合约：{inst}")
         inst.main_code = check_bar.code
         inst.change_time = day
         inst.save(update_fields=['main_code', 'change_time'])
@@ -438,13 +448,14 @@ def create_main(inst: Instrument):
     print('processing ', inst.product_code)
     if inst.change_time is None:
         for day in DailyBar.objects.filter(
+                # time__gte=datetime.datetime.strptime('20211211', '%Y%m%d'),
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
                 'time').values_list('time', flat=True).distinct():
             print(day, calc_main_inst(inst, datetime.datetime.combine(
                 day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
     else:
         for day in DailyBar.objects.filter(
-                time__gt=inst.change_time.date(),
+                # time__gte=datetime.datetime.strptime('20211211', '%Y%m%d'),
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
                 'time').values_list('time', flat=True).distinct():
             print(day, calc_main_inst(inst, datetime.datetime.combine(
@@ -452,7 +463,7 @@ def create_main(inst: Instrument):
 
 
 def create_main_all():
-    for inst in Instrument.objects.filter(id__gte=16):
+    for inst in Instrument.objects.filter(~Q(exchange=ExchangeType.INE)):
         create_main(inst)
     print('all done!')
 
@@ -548,7 +559,7 @@ def find_best_score(n: int = 20):
         'product_code', flat=True)
     result = list()
     for code_list in tqdm(combinations(code_list, n), total=nCr(code_list.count(), n)):
-        score_df = pd.DataFrame([corr_matrix.ix[i, j] for i, j in combinations(code_list, 2)])
+        score_df = pd.DataFrame([corr_matrix.iloc[i, j] for i, j in combinations(code_list, 2)])
         score = (round((1 - (score_df.abs() ** 2).mean()[0]) * 100, 3) - 50) * 2
         result.append((score, ','.join(code_list)))
     result.sort(key=lambda tup: tup[0])
@@ -557,34 +568,33 @@ def find_best_score(n: int = 20):
 
 
 def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Strategy):
-    his_break_n = strategy.param_set.get(code='BreakPeriod').int_value
-    his_atr_n = strategy.param_set.get(code='AtrPeriod').int_value
-    his_long_n = strategy.param_set.get(code='LongPeriod').int_value
-    his_short_n = strategy.param_set.get(code='ShortPeriod').int_value
-    his_stop_n = strategy.param_set.get(code='StopLoss').int_value
+    break_n = strategy.param_set.get(code='BreakPeriod').int_value
+    atr_n = strategy.param_set.get(code='AtrPeriod').int_value
+    long_n = strategy.param_set.get(code='LongPeriod').int_value
+    short_n = strategy.param_set.get(code='ShortPeriod').int_value
+    stop_n = strategy.param_set.get(code='StopLoss').int_value
     df = to_df(MainBar.objects.filter(
         time__lte=day.date(),
         exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
         'time', 'open', 'high', 'low', 'close', 'settlement'))
     df.index = pd.DatetimeIndex(df.time)
-    df['atr'] = ATR(df, timeperiod=his_atr_n)
+    df['atr'] = ATR(df.open, df.high, df.low, timeperiod=atr_n)
+    # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend
     df['short_trend'] = df.close
     df['long_trend'] = df.close
     for idx in range(1, df.shape[0]):
-        df.ix[idx, 'short_trend'] = (df.ix[idx-1, 'short_trend'] * (his_short_n - 1) +
-                                     df.ix[idx, 'close']) / his_short_n
-        df.ix[idx, 'long_trend'] = (df.ix[idx-1, 'long_trend'] * (his_long_n - 1) +
-                                    df.ix[idx, 'close']) / his_long_n
-    df['high_line'] = df.close.rolling(window=his_break_n).max()
-    df['low_line'] = df.close.rolling(window=his_break_n).min()
+        df.iloc[idx, 7] = (df.iloc[idx - 1, 7] * (short_n - 1) + df.iloc[idx, 4]) / short_n
+        df.iloc[idx, 8] = (df.iloc[idx - 1, 8] * (long_n - 1) + df.iloc[idx, 4]) / long_n
+    df['high_line'] = df.close.rolling(window=break_n).max()
+    df['low_line'] = df.close.rolling(window=break_n).min()
     cur_pos = 0
     last_trade = None
-    for cur_idx in range(his_break_n+1, df.shape[0]):
+    for cur_idx in range(break_n+1, df.shape[0]):
         idx = cur_idx - 1
         cur_date = df.index[cur_idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
         prev_date = df.index[idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
         if cur_pos == 0:
-            if df.short_trend[idx] > df.long_trend[idx] and df.close[idx] > df.high_line[idx-1]:
+            if df.short_trend[idx] > df.long_trend[idx] and int(df.close[idx]) >= int(df.high_line[idx-1]):
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code, time=cur_date).first()
                 Signal.objects.create(
@@ -596,7 +606,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                     code=new_bar.code, direction=DirectionType.LONG,
                     open_time=cur_date, shares=1, filled_shares=1, avg_entry_price=new_bar.open)
                 cur_pos = cur_idx
-            elif df.short_trend[idx] < df.long_trend[idx] and df.close[idx] < df.low_line[idx-1]:
+            elif df.short_trend[idx] < df.long_trend[idx] and int(df.close[idx]) < int(df.low_line[idx-1]):
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
@@ -614,7 +624,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 exchange=inst.exchange, product_code=inst.product_code,
                 time__gte=last_trade.open_time,
                 time__lt=prev_date).aggregate(Max('high'))['high__max'])
-            if df.close[idx] <= hh - df.atr[cur_pos-1] * his_stop_n:
+            if df.close[idx] <= hh - df.atr[cur_pos-1] * stop_n:
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
@@ -633,7 +643,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                 exchange=inst.exchange, product_code=inst.product_code,
                 time__gte=last_trade.open_time,
                 time__lt=prev_date).aggregate(Min('low'))['low__min'])
-            if df.close[idx] >= ll + df.atr[cur_pos * -1-1] * his_stop_n:
+            if df.close[idx] >= ll + df.atr[cur_pos * -1-1] * stop_n:
                 new_bar = MainBar.objects.filter(
                     exchange=inst.exchange, product_code=inst.product_code,
                     time=df.index[cur_idx].to_pydatetime().date()).first()
@@ -662,6 +672,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
 
 def calc_his_all(day: datetime.datetime):
     strategy = Strategy.objects.get(name='大哥2.0')
+    print(f'calc_his_all day: {day} stragety: {strategy}')
     for inst in strategy.instruments.all():
         print('process', inst)
         last_day = Trade.objects.filter(instrument=inst, close_time__isnull=True).values_list(
@@ -735,3 +746,108 @@ def load_kt_data(directory: str = '/Users/jeffchen/kt_data/'):
             MainBar.objects.bulk_create(insert_list)
             Instrument.objects.filter(product_code=code).update(
                 last_main=last_main, main_code=cur_main, change_time=change_time)
+
+
+# 从交易所获取合约当日的涨跌停幅度
+async def get_contracts_argument(day: datetime.datetime = None) -> bool:
+    try:
+        if day is None:
+            day = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+        day_str = day.strftime('%Y%m%d')
+        contract_dict = {}
+        async with aiohttp.ClientSession() as session:
+
+            # 上期所
+            async with session.get(
+                    f'http://{shfe_ip}/data/instrument/ContractDailyTradeArgument{day_str}.dat') as response:
+                rst = await response.read()
+                rst_json = json.loads(rst)
+                for inst_data in rst_json['ContractDailyTradeArgument']:
+                    """
+{"HDEGE_LONGMARGINRATIO":".10000000","HDEGE_SHORTMARGINRATIO":".10000000","INSTRUMENTID":"cu2201",
+"LOWER_VALUE":".08000000","PRICE_LIMITS":"","SPEC_LONGMARGINRATIO":".10000000","SPEC_SHORTMARGINRATIO":".10000000",
+"TRADINGDAY":"20211217","UPDATE_DATE":"2021-12-17 09:51:20","UPPER_VALUE":".08000000","id":124468118}
+                    """
+                    # logger.info(f'inst_data: {inst_data}')
+                    code = re.findall('[A-Za-z]+', inst_data['INSTRUMENTID'])[0]
+                    limit_ratio = str_to_number(inst_data['UPPER_VALUE'])
+                    if code not in contract_dict:
+                        contract_dict[code] = limit_ratio
+            # 大商所
+            async with session.post(f'http://{dce_ip}/publicweb/notificationtips/exportDayTradPara.html',
+                                    data={'exportFlag': 'txt'}) as response:
+                rst = await response.text()
+                for lines in rst.split('\r\n')[3:400]:
+                    # 跳过期权合约
+                    if '本系列限额' in lines:
+                        break
+                    inst_data_raw = [x.strip() for x in lines.split('\t')]
+                    inst_data = []
+                    for cell in inst_data_raw:
+                        if len(cell) > 0:
+                            inst_data.append(cell)
+                    """
+[0合约,1交易保证金比例(投机),2交易保证金金额（元/手）(投机),3交易保证金比例(套保),4交易保证金金额（元/手）(套保),5涨跌停板比例,
+     6涨停板价位（元）,7跌停板价位（元）]
+['a2201','0.12','7,290','0.08','4,860','0.08','6,561','5,589','30,000','15,000']
+                    """
+                    code = re.findall('[A-Za-z]+', inst_data[0])[0]
+                    limit_ratio = str_to_number(inst_data[5])
+                    if code not in contract_dict:
+                        contract_dict[code] = limit_ratio
+            # 郑商所
+            async with session.get(f'http://{czce_ip}/cn/DFSStaticFiles/Future/{day.year}/{day_str}/'
+                                   f'FutureDataClearParams.txt') as response:
+                rst = await response.text()
+                for lines in rst.split('\n')[2:]:
+                    if not lines:
+                        continue
+                    inst_data = [x.strip() for x in lines.split('|' if '|' in lines else ',')]
+                    """
+[0合约代码,1当日结算价,2是否单边市,3连续单边市天数,4交易保证金率(%),5涨跌停板(%),6交易手续费,7交割手续费,8日内平今仓交易手续费,9日持仓限额]
+['AP201','8,148.00','N','0','10','±9','5.00','0.00','20.00','200','']
+                    """
+                    code = re.findall('[A-Za-z]+', inst_data[0])[0]
+                    limit_ratio = str_to_number(inst_data[5][1:]) / 100
+                    if code not in contract_dict:
+                        contract_dict[code] = limit_ratio
+            # 中金所
+            async with session.get(f"http://{cffex_ip}/sj/jycs/{day.strftime('%Y%m/%d')}/index.xml") as response:
+                rst = await response.text()
+                max_conn_cffex.release()
+                tree = ET.fromstring(rst)
+                for inst_data in tree:
+                    """
+                    <INDEX>
+                    <TRADING_DAY>20211216</TRADING_DAY>
+                    <PRODUCT_ID>IC</PRODUCT_ID>
+                    <INSTRUMENT_ID>IC2112</INSTRUMENT_ID>
+                    <INSTRUMENT_MONTH>2112</INSTRUMENT_MONTH>
+                    <BASIS_PRICE>6072.8</BASIS_PRICE>
+                    <OPEN_DATE>20210419</OPEN_DATE>
+                    <END_TRADING_DAY>20211217</END_TRADING_DAY>
+                    <UPPER_VALUE>0.1</UPPER_VALUE>
+                    <LOWER_VALUE>0.1</LOWER_VALUE>
+                    <UPPERLIMITPRICE>8063.6</UPPERLIMITPRICE>
+                    <LOWERLIMITPRICE>6597.6</LOWERLIMITPRICE>
+                    <LONG_LIMIT>1200</LONG_LIMIT>
+                    </INDEX>
+                    """
+                    # 不存储期权合约
+                    if len(inst_data.findtext('INSTRUMENT_ID').strip()) > 6:
+                        continue
+                    code = inst_data.findtext('PRODUCT_ID').strip()
+                    limit_ratio = str_to_number(inst_data.findtext('UPPER_VALUE').strip())
+                    if code not in contract_dict:
+                        contract_dict[code] = limit_ratio
+            # 保存数据
+            for code, ratio in contract_dict.items():
+                inst = Instrument.objects.filter(product_code=code).first()
+                if inst:
+                    inst.up_limit_ratio = ratio
+                    inst.down_limit_ratio = ratio
+                    inst.save(update_fields=['up_limit_ratio', 'down_limit_ratio'])
+        return True
+    except Exception as e:
+        logger.error('get_contracts_argument failed: %s', e, exc_info=True)
+        return False

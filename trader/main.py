@@ -28,9 +28,9 @@ django.setup()
 import asyncio
 from trader.strategy.brother2 import TradeStrategy
 from trader.utils.read_config import *
-import trader.utils.logger as my_logger
+from trader.utils.my_logger import get_my_logger
 
-logger = my_logger.get_logger('main')
+logger = get_my_logger('main')
 
 
 if __name__ == '__main__':

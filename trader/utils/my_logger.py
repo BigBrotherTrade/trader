@@ -18,7 +18,7 @@ import logging
 from trader.utils.read_config import *
 
 
-def get_logger(logger_name='main'):
+def get_my_logger(logger_name='main'):
     logger = logging.getLogger(logger_name)
     if logger.handlers:
         return logger
