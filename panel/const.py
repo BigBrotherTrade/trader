@@ -31,11 +31,12 @@ class ExchangeType(DjangoChoices):
 
 
 class SectionType(DjangoChoices):
-    AgriculturalCommodities = C(value='AgriculturalCommodities', label='农产品')
-    NonAgriculturalCommodities = C(value='NonAgriculturalCommodities', label='工业品')
-    Equities = C(value='Equities', label='股指')
-    Rates = C(value='Rates', label='利率')
-    Currencies = C(value='Currencies', label='货币')
+    Stock = C(label='股票', value='股票')
+    Bond = C(label='债券', value='债券')
+    Metal = C(label='基本金属', value='基本金属')
+    Agricultural = C(label='农产品', value='农产品')
+    EnergyChemical = C(label='能源化工', value='能源化工')
+    BlackMaterial = C(label='黑色建材', value='黑色建材')
 
 
 class AddressType(DjangoChoices):

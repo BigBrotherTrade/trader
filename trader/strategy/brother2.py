@@ -642,7 +642,7 @@ class TradeStrategy(BaseModule):
     async def heartbeat(self):
         self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=301)
 
-    @param_function(crontab='55 8 * * * 5')
+    @param_function(crontab='55 8 * * *')
     async def processing_signal1(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
@@ -668,7 +668,7 @@ class TradeStrategy(BaseModule):
                 logger.info('发现遗漏信号: %s', sig)
                 self.process_signal(sig, use_tick=True)
 
-    @param_function(crontab='10 9 * * * 5')
+    @param_function(crontab='10 9 * * *')
     async def processing_signal2(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
@@ -676,25 +676,25 @@ class TradeStrategy(BaseModule):
         if trading:
             logger.info('查询待处理国债信号..')
             for sig in Signal.objects.filter(
-                    instrument__exchange=ExchangeType.CFFEX,
+                    instrument__exchange=ExchangeType.CFFEX, instrument__section=SectionType.Bond,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
                 logger.info('发现国债信号: %s', sig)
                 self.process_signal(sig)
 
-    @param_function(crontab='16 9 * * *')
+    @param_function(crontab='25 9 * * *')
     async def check_signal2_processed(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询遗漏的国债信号..')
+            logger.info('查询待处理股指信号..')
             for sig in Signal.objects.filter(
-                    instrument__exchange=ExchangeType.CFFEX,
+                    instrument__exchange=ExchangeType.CFFEX, instrument__section=SectionType.Stock,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
-                logger.info('发现遗漏信号: %s', sig)
-                self.process_signal(sig, use_tick=True)
+                logger.info('发现股指信号: %s', sig)
+                self.process_signal(sig)
 
-    @param_function(crontab='55 20 * * * 5')
+    @param_function(crontab='55 20 * * *')
     async def processing_signal3(self):
         day = datetime.datetime.today()
         day = day.replace(tzinfo=pytz.FixedOffset(480))
@@ -702,7 +702,6 @@ class TradeStrategy(BaseModule):
         if trading:
             logger.info('查询待处理夜盘信号..')
             for sig in Signal.objects.filter(
-                    ~Q(instrument__exchange=ExchangeType.CFFEX),
                     strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
                 logger.info('发现夜盘信号: %s', sig)
                 self.process_signal(sig)
@@ -715,7 +714,6 @@ class TradeStrategy(BaseModule):
         if trading:
             logger.info('查询遗漏的夜盘信号..')
             for sig in Signal.objects.filter(
-                    ~Q(instrument__exchange=ExchangeType.CFFEX),
                     strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
                 logger.info('发现遗漏信号: %s', sig)
                 self.process_signal(sig, use_tick=True)
