@@ -758,7 +758,7 @@ class TradeStrategy(BaseModule):
                         inst_dict[inst['ProductID']]['name'] = ''
         for code, data in inst_dict.items():
             all_inst = ','.join(sorted(inst_set[code]))
-            if data['margin'] > 1 or code == 'TS':
+            if data['margin'] > 1 or code == 'im':
                 continue
             inst, _ = Instrument.objects.update_or_create(product_code=code, defaults={
                 'exchange': data['exchange'],
@@ -801,10 +801,8 @@ class TradeStrategy(BaseModule):
             await asyncio.wait(tasks)
             logger.info('获取合约涨跌停幅度...')
             await get_contracts_argument(day)
-            for inst_obj in Instrument.objects.filter(~Q(exchange=ExchangeType.INE), ~Q(product_code='im')):
+            for inst_obj in Instrument.objects.all():
                 logger.info('计算连续合约, 交易信号: %s', inst_obj.name)
-                # if inst_obj.name == 'ZC':
-                #     continue
                 calc_main_inst(inst_obj, day)
                 self.calc_signal(inst_obj, day)
         except Exception as e:

@@ -137,9 +137,13 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
                     name = inst_data['PRODUCTNAME'].strip()
                     if code not in inst_name_dict:
                         inst_name_dict[code] = name
+                    exchange_str = ExchangeType.SHFE
+                    # 上期能源的四个品种
+                    if code in ['sc', 'bc', 'nr', 'lu']:
+                        exchange_str = ExchangeType.INE
                     DailyBar.objects.update_or_create(
                         code=code + inst_data['DELIVERYMONTH'],
-                        exchange=ExchangeType.SHFE, time=day, defaults={
+                        exchange=exchange_str, time=day, defaults={
                             'expire_date': inst_data['DELIVERYMONTH'],
                             'open': inst_data['OPENPRICE'] if inst_data['OPENPRICE'] else inst_data['CLOSEPRICE'],
                             'high': inst_data['HIGHESTPRICE'] if inst_data['HIGHESTPRICE'] else
@@ -426,7 +430,7 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
                 '-volume', '-open_interest').first()
             print('check_bar=', check_bar)
             if check_bar is None:
-                _, trading = asyncio.get_event_loop().run_until_complete(is_trading_day(day))
+                _, trading = asyncio.get_running_loop().run_until_complete(is_trading_day(day))
                 if not trading:
                     return inst.main_code, updated
             if bar is None or bar.code != check_bar.code:
@@ -463,7 +467,7 @@ def create_main(inst: Instrument):
 
 
 def create_main_all():
-    for inst in Instrument.objects.filter(~Q(exchange=ExchangeType.INE)):
+    for inst in Instrument.objects.all():
         create_main(inst)
     print('all done!')
 

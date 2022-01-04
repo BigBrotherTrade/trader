@@ -64,8 +64,8 @@ async def fetch_bar2():
 
 
 # asyncio.get_event_loop().run_until_complete(fetch_bar2())
-# create_main_all()
+create_main_all()
 # fetch_from_quandl_all()
 # clean_dailybar()
 # load_kt_data()
-calc_his_all(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))-datetime.timedelta(days=1))
+# calc_his_all(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))-datetime.timedelta(days=1))
