@@ -19,7 +19,7 @@ import django
 if sys.platform == 'darwin':
     sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
 elif sys.platform == 'win32':
-    sys.path.append(r'D:\UserData\Documents\GitHub\dashboard')
+    sys.path.append(r'D:\github\dashboard')
 else:
     sys.path.append('/root/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
@@ -35,7 +35,6 @@ logger = get_my_logger('main')
 
 if __name__ == '__main__':
     loop = asyncio.new_event_loop()
-    loop.set_debug(True)
     asyncio.set_event_loop(loop)
     big_brother = None
     try:
@@ -45,7 +44,7 @@ if __name__ == '__main__':
                 os.makedirs(app_dir.user_cache_dir)
         with open(pid_path, 'w') as pid_file:
             pid_file.write(str(os.getpid()))
-        big_brother = TradeStrategy(io_loop=loop)
+        big_brother = TradeStrategy(name='大哥2.0', io_loop=loop)
         print('Big Brother is watching you!')
         print('used config file:', config_file)
         print('log stored in:', app_dir.user_log_dir)

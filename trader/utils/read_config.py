@@ -30,6 +30,7 @@ market_response_format = MSG:CTP:RSP:MARKET:{}:{}
 
 [TRADE]
 command_timeout = 5
+ignore_inst = WH,bb,JR,RI,RS,LR,PM,im
 
 [REDIS]
 host = 127.0.0.1

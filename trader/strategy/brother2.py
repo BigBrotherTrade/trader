@@ -31,7 +31,7 @@ from trader.utils.func_container import param_function
 from trader.utils.read_config import *
 from trader.utils.my_logger import get_my_logger
 from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, \
-    update_from_czce, update_from_cffex, get_contracts_argument, calc_main_inst
+    update_from_czce, update_from_cffex, get_contracts_argument, calc_main_inst, str_to_number
 from panel.models import *
 
 logger = get_my_logger('CTPApi')
@@ -39,42 +39,27 @@ HANDLER_TIME_OUT = config.getint('TRADE', 'command_timeout', fallback=10)
 
 
 class TradeStrategy(BaseModule):
-    __market_response_format = config.get('MSG_CHANNEL', 'market_response_format')
-    __trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
-    __request_format = config.get('MSG_CHANNEL', 'request_format')
-    __request_id = random.randint(0, 65535)
-    __order_ref = random.randint(0, 999)
-    __instruments = defaultdict(dict)
-    __current = Broker.objects.get(id=1).current  # 当前动态权益
-    __pre_balance = 0  # 静态权益
-    __cash = 0  # 可用资金
-    __shares = dict()  # { instrument : position }
-    __cur_account = None
-    __margin = 0  # 占用保证金
-    __activeOrders = {}  # 未成交委托单
-    __waiting_orders = {}
-    __cancel_orders = {}
-    __initialed = False
-    __login_time = None
-    # 提合约字母部分 IF1509 -> IF
-    __re_extract = re.compile(r'([a-zA-Z]*)(\d+)')
-    __last_time = None
-    __watch_pos = {}
-    __ATR = {}
-    __broker = Broker.objects.get(id=1)
-    __fake = Broker.objects.get(id=1).fake  # 虚拟资金
-    __strategy = Strategy.objects.get(id=1)
-    __inst_ids = Strategy.objects.get(id=1).instruments.all().values_list('product_code', flat=True)
-
-    def update_order(self, order: dict):
-        if order['OrderStatus'] == ApiStruct.OST_NotTouched and \
-                        order['OrderSubmitStatus'] == ApiStruct.OSS_InsertSubmitted:
-            if self.__activeOrders.get(order['OrderRef']) is None:
-                #     logger.info(u"OpenOrder=%s", order)
-                #     build_order = self.build_order_from_open_order(order, self.getInstrumentTraits())
-                #     self._register_order(build_order)
-                #     self.update_order(order)
-                pass
+    def __init__(self, name: str, io_loop: asyncio.AbstractEventLoop = None):
+        super().__init__(io_loop)
+        self.__market_response_format = config.get('MSG_CHANNEL', 'market_response_format')
+        self.__trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
+        self.__request_format = config.get('MSG_CHANNEL', 'request_format')
+        self.__ignore_inst_list = config.get('TRADE', 'ignore_inst').split(',')
+        self.__request_id = random.randint(0, 65535)
+        self.__order_ref = random.randint(0, 999)
+        self.__strategy = Strategy.objects.get(name=name)
+        self.__inst_ids = self.__strategy.instruments.all().values_list('product_code', flat=True)
+        self.__broker = self.__strategy.broker
+        self.__fake = self.__broker.fake  # 虚拟资金
+        self.__current = self.__broker.current  # 当前动态权益
+        self.__pre_balance = self.__broker.pre_balance  # 静态权益
+        self.__cash = self.__broker.cash  # 可用资金
+        self.__shares = dict()  # { instrument : position }
+        self.__cur_account = None
+        self.__margin = 0  # 占用保证金
+        self.__activeOrders = {}  # 未成交委托单
+        self.__re_extract_code = re.compile(r'([a-zA-Z]*)(\d+)')  # 提合约字母部分 IF1509 -> IF
+        self.__re_extract_name = re.compile('(.*?)([0-9]+)(.*?)$')  # 提取合约文字部分
 
     def update_account(self, account: dict):
         # 静态权益=上日结算-出金金额+入金金额
@@ -97,28 +82,6 @@ class TradeStrategy(BaseModule):
         self.__strategy = self.__broker.strategy_set.first()
         self.__inst_ids = [inst.product_code for inst in self.__strategy.instruments.all()]
 
-    def calc_fee(self, trade: dict):
-        inst = trade['InstrumentID']
-        if inst not in self.__instruments:
-            return -1
-        action = trade['OffsetFlag']
-        price = trade['Price']
-        volume = trade['Volume']
-        if action == ApiStruct.OF_Open:
-            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * \
-                   self.__instruments[inst]['fee']['OpenRatioByMoney'] + volume * \
-                   self.__instruments[inst]['fee']['OpenRatioByVolume']
-        elif action == ApiStruct.OF_Close:
-            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * \
-                   self.__instruments[inst]['fee']['CloseRatioByMoney'] + volume * \
-                   self.__instruments[inst]['fee']['CloseRatioByVolume']
-        elif action == ApiStruct.OF_CloseToday:
-            return self.__instruments[inst]['info']['VolumeMultiple'] * price * volume * \
-                   self.__instruments[inst]['fee']['CloseTodayRatioByMoney'] + volume * \
-                   self.__instruments[inst]['fee']['CloseTodayRatioByVolume']
-        else:
-            return 0
-
     def update_position(self):
         for _, pos in self.__shares.items():
             try:
@@ -129,8 +92,6 @@ class TradeStrategy(BaseModule):
                 if not inst:
                     logger.error(f"update_position 未发现合约 {pos['InstrumentID']}")
                     continue
-                # raw_tick = self.raw_redis.get(pos['InstrumentID'])
-                # tick = json.loads(raw_tick)
                 bar = DailyBar.objects.filter(
                     exchange=inst.exchange, code=pos['InstrumentID']).order_by('-time').first()
                 if not bar:
@@ -165,7 +126,6 @@ class TradeStrategy(BaseModule):
         await self.query('InvestorPositionDetail')
         # await self.processing_signal3()
         # await self.refresh_instrument()
-
         # await self.collect_tick_stop()
         # await self.collect_quote()
         # day = datetime.datetime.strptime('20161031', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
@@ -183,11 +143,10 @@ class TradeStrategy(BaseModule):
                             f"价格{order['LimitPrice']}")
                 await self.cancel_order(order)
         # await self.force_close_all()
+        # 获取持仓合约的tick数据
 
     async def stop(self):
         pass
-        # if self.__inst_ids:
-        #     await self.UnSubscribeMarketData(self.__inst_ids)
 
     def next_order_ref(self):
         self.__order_ref = 1 if self.__order_ref == 999 else self.__order_ref + 1
@@ -418,41 +377,40 @@ class TradeStrategy(BaseModule):
                 await sub_client.close()
             return None
 
-    # @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
-    # async def OnRtnDepthMarketData(self, channel, tick: dict):
-    #     """
-    #     'PreOpenInterest': 50990,
-    #     'TradingDay': '20160803',
-    #     'SettlementPrice': 1.7976931348623157e+308,
-    #     'AskVolume1': 40,
-    #     'Volume': 11060,
-    #     'LastPrice': 37740,
-    #     'LowestPrice': 37720,
-    #     'ClosePrice': 1.7976931348623157e+308,
-    #     'ActionDay': '20160803',
-    #     'UpdateMillisec': 0,
-    #     'PreClosePrice': 37840,
-    #     'LowerLimitPrice': 35490,
-    #     'OpenInterest': 49460,
-    #     'UpperLimitPrice': 40020,
-    #     'AveragePrice': 189275.7233273056,
-    #     'HighestPrice': 38230,
-    #     'BidVolume1': 10,
-    #     'UpdateTime': '11:03:12',
-    #     'InstrumentID': 'cu1608',
-    #     'PreSettlementPrice': 37760,
-    #     'OpenPrice': 37990,
-    #     'BidPrice1': 37740,
-    #     'Turnover': 2093389500,
-    #     'AskPrice1': 37750
-    #     """
-    #     try:
-    #         inst = channel.split(':')[-1]
-    #         tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
-    #         if datetime.datetime.now().hour < 9:
-    #             logger.info('inst=%s, tick: %s', inst, tick)
-    #     except Exception as ee:
-    #         logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
+    @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
+    async def OnRtnDepthMarketData(self, channel, tick: dict):
+        """
+        'PreOpenInterest': 50990,
+        'TradingDay': '20160803',
+        'SettlementPrice': 1.7976931348623157e+308,
+        'AskVolume1': 40,
+        'Volume': 11060,
+        'LastPrice': 37740,
+        'LowestPrice': 37720,
+        'ClosePrice': 1.7976931348623157e+308,
+        'ActionDay': '20160803',
+        'UpdateMillisec': 0,
+        'PreClosePrice': 37840,
+        'LowerLimitPrice': 35490,
+        'OpenInterest': 49460,
+        'UpperLimitPrice': 40020,
+        'AveragePrice': 189275.7233273056,
+        'HighestPrice': 38230,
+        'BidVolume1': 10,
+        'UpdateTime': '11:03:12',
+        'InstrumentID': 'cu1608',
+        'PreSettlementPrice': 37760,
+        'OpenPrice': 37990,
+        'BidPrice1': 37740,
+        'Turnover': 2093389500,
+        'AskPrice1': 37750
+        """
+        try:
+            inst = channel.split(':')[-1]
+            tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
+            logger.info('inst=%s, tick: %s', inst, tick)
+        except Exception as ee:
+            logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
     # TODO 有时更新仓位计算会出现错误，导致同样的品种头寸被插入而不是更新
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnTrade:*')
@@ -649,7 +607,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询待处理日盘信号..')
+            logger.info('查询日盘信号..')
             for sig in Signal.objects.filter(
                     ~Q(instrument__exchange=ExchangeType.CFFEX),
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
@@ -675,7 +633,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询待处理股指和国债信号..')
+            logger.info('查询股指和国债信号..')
             for sig in Signal.objects.filter(
                     instrument__exchange=ExchangeType.CFFEX,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
@@ -701,7 +659,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询待处理夜盘信号..')
+            logger.info('查询夜盘信号..')
             for sig in Signal.objects.filter(
                     strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
                 logger.info('发现夜盘信号: %s', sig)
@@ -732,44 +690,42 @@ class TradeStrategy(BaseModule):
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
         logger.info('更新合约数据..')
-        inst_set = defaultdict(set)
         inst_dict = defaultdict(dict)
-        regex = re.compile('(.*?)([0-9]+)(.*?)$')
         inst_list = await self.query('Instrument')
         for inst in inst_list:
             if not inst['empty']:
                 if inst['IsTrading'] == 1 and inst['ProductClass'] == ApiStruct.PC_Futures and inst['StrikePrice'] == 0:
-                    inst_set[inst['ProductID']].add(inst['InstrumentID'])
-                    inst_dict[inst['ProductID']]['exchange'] = inst['ExchangeID']
-                    inst_dict[inst['ProductID']]['product_code'] = inst['ProductID']
-                    inst_dict[inst['ProductID']]['multiple'] = inst['VolumeMultiple']
-                    inst_dict[inst['ProductID']]['price_tick'] = inst['PriceTick']
-                    inst_dict[inst['ProductID']]['margin'] = inst['LongMarginRatio']
-                    if 'name' not in inst_dict[inst['ProductID']]:
-                        valid_name = regex.match(inst['InstrumentName'])
-                        if valid_name is not None:
-                            valid_name = valid_name.group(1)
-                        else:
-                            valid_name = inst['InstrumentName']
-                        inst_dict[inst['ProductID']]['name'] = valid_name
-                    if inst_dict[inst['ProductID']]['name'] == inst_dict[inst['ProductID']]['product_code']:
-                        inst_dict[inst['ProductID']]['name'] = ''
-        for code, data in inst_dict.items():
-            all_inst = ','.join(sorted(inst_set[code]))
-            if data['margin'] > 1 or code == 'im':
-                continue
-            inst, _ = Instrument.objects.update_or_create(product_code=code, defaults={
-                'exchange': data['exchange'],
-                # 'name': data['name'],
-                'all_inst': all_inst,
-                'volume_multiple': data['multiple'],
-                'price_tick': data['price_tick'],
-                'margin_rate': data['margin']
-            })
-            if data['name'] and data['name'] != inst.product_code:
-                inst.name = data['name']
-                inst.save(update_fields=['name'])
-            await self.update_inst_fee(inst)
+                    if inst['ProductID'] in self.__ignore_inst_list or inst['LongMarginRatio'] > 1:
+                        continue
+                    inst_dict[inst['ProductID']][inst['InstrumentID']] = dict()
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['name'] = inst['InstrumentName']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['exchange'] = inst['ExchangeID']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['multiple'] = inst['VolumeMultiple']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['price_tick'] = inst['PriceTick']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['margin'] = inst['LongMarginRatio']
+        for code in inst_dict.keys():
+            all_inst = ','.join(sorted(inst_dict[code].keys()))
+            inst_data = list(inst_dict[code].values())[0]
+            valid_name = self.__re_extract_name.match(inst_data['name'])
+            if valid_name is not None:
+                valid_name = valid_name.group(1)
+            else:
+                valid_name = inst_data['name']
+            if valid_name == code:
+                valid_name = ''
+            inst_data['name'] = valid_name
+            inst, created = Instrument.objects.update_or_create(product_code=code, exchange=inst_data['exchange'])
+            if created:
+                inst.name = inst_data['name']
+                inst.volume_multiple = inst_data['multiple']
+                inst.price_tick = inst_data['price_tick']
+                inst.margin_rate = inst_data['margin']
+                inst.save(update_fields=['name', 'volume_multiple', 'price_tick', 'margin_rate'])
+            elif inst.main_code:
+                inst.margin_rate = inst_dict[code][inst.main_code]['margin']
+                inst.all_inst = all_inst
+                inst.save(update_fields=['margin_rate', 'all_inst'])
+                await self.update_inst_fee(inst)
         logger.info('更新合约列表完成!')
 
     @param_function(crontab='0 17 * * *')
@@ -877,16 +833,12 @@ class TradeStrategy(BaseModule):
         更新每一个合约的手续费
         """
         try:
-            main_code = inst.main_code
-            if main_code is None:
-                main_code = inst.all_inst.split(',')[0]
-            fee = await self.query('InstrumentCommissionRate', InstrumentID=main_code)
-            if fee:
-                fee = fee[0]
-                inst.fee_money = Decimal(fee['CloseRatioByMoney'])
-                inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
+            fee = await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code)
+            fee = fee[0]
+            inst.fee_money = Decimal(fee['CloseRatioByMoney'])
+            inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
             inst.save(update_fields=['fee_money', 'fee_volume'])
-            logger.info(f"{inst} 已更新保证金和手续费")
+            logger.info(f"{inst} 已更新手续费")
         except Exception as e:
             logger.error('update_inst_fee failed: %s', e, exc_info=True)
 
@@ -1096,20 +1048,16 @@ class TradeStrategy(BaseModule):
             return False
         return True
 
-    @staticmethod
-    def calc_up_limit(inst: Instrument, bar: DailyBar):
-        # tick = json.loads(self.raw_redis.get(bar.code))
-        # ratio = (Decimal(tick['UpperLimitPrice']) -
-        #          Decimal(tick['PreSettlementPrice'])) / Decimal(tick['PreSettlementPrice'])
-        # ratio = Decimal(round(ratio, 3))
-        price = price_round(bar.settlement * (Decimal(1) + inst.up_limit_ratio), inst.price_tick)
-        return price - inst.price_tick
+    def calc_up_limit(self, inst: Instrument, bar: DailyBar):
+        settlement = bar.settlement
+        limit_ratio = str_to_number(self.raw_redis.get(f"LIMITRATIO:{inst.exchange}:{inst.product_code}:{bar.code}"))
+        price_tick = inst.price_tick
+        price = price_round(settlement * (Decimal(1) + limit_ratio), price_tick)
+        return price - price_tick
 
-    @staticmethod
-    def calc_down_limit(inst: Instrument, bar: DailyBar):
-        # tick = json.loads(self.raw_redis.get(bar.code))
-        # ratio = (Decimal(tick['PreSettlementPrice']) -
-        #          Decimal(tick['LowerLimitPrice'])) / Decimal(tick['PreSettlementPrice'])
-        # ratio = Decimal(round(ratio, 3))
-        price = price_round(bar.settlement * (Decimal(1) - inst.up_limit_ratio), inst.price_tick)
-        return price + inst.price_tick
+    def calc_down_limit(self, inst: Instrument, bar: DailyBar):
+        settlement = bar.settlement
+        limit_ratio = str_to_number(self.raw_redis.get(f"LIMITRATIO:{inst.exchange}:{inst.product_code}:{bar.code}"))
+        price_tick = inst.price_tick
+        price = price_round(settlement * (Decimal(1) - limit_ratio), price_tick)
+        return price + price_tick

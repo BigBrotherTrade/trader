@@ -20,9 +20,9 @@ import django
 if sys.platform == 'darwin':
     sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
 elif sys.platform == 'win32':
-    sys.path.append(r'D:\UserData\Documents\GitHub\dashboard')
+    sys.path.append(r'D:\GitHub\dashboard')
 else:
-    sys.path.append('/home/cyh/bigbrother/dashboard')
+    sys.path.append('/root/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
@@ -42,8 +42,8 @@ class APITest(asynctest.TestCase):
     def tearDown(self) -> None:
         self.redis_client.close()
 
-    async def test_get_shfe_data(self):
-        self.assertTrue(await update_from_shfe(self.last_trading_day))
+    # async def test_get_shfe_data(self):
+    #     self.assertTrue(await update_from_shfe(self.last_trading_day))
 
     # async def test_get_dce_data(self):
     #     self.assertTrue(await update_from_dce(self.last_trading_day))
@@ -54,5 +54,5 @@ class APITest(asynctest.TestCase):
     # async def test_get_cffex_data(self):
     #     self.assertTrue(await update_from_cffex(self.last_trading_day))
     #
-    # async def test_get_contracts_argument(self):
-    #     self.assertTrue(await get_contracts_argument(self.last_trading_day))
+    async def test_get_contracts_argument(self):
+        self.assertTrue(await get_contracts_argument(self.last_trading_day))

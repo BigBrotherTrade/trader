@@ -47,15 +47,13 @@ max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 max_conn_sina = asyncio.Semaphore(15)
 quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
-# cffex_ip = '183.195.155.138'    # www.cffex.com.cn
 cffex_ip = 'www.cffex.com.cn'    # www.cffex.com.cn
-# shfe_ip = '220.248.39.134'      # www.shfe.com.cn
 shfe_ip = 'www.shfe.com.cn'      # www.shfe.com.cn
-# czce_ip = '220.194.205.169'     # www.czce.com.cn
 czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
-# dce_ip = '218.25.154.94'        # www.dce.com.cn
 dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
 # ts_api = tushare.pro_api(config.get('Tushare', 'token'))
+IGNORE_INST_LIST = "WH,bb,JR,RI,RS,LR,PM,im".split(',')  # TODO: 先这么放着吧
+INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
 
 
 def str_to_number(s):
@@ -86,7 +84,7 @@ def price_round(x: Decimal, base: Decimal):
 async def is_trading_day(day: datetime.datetime):
     s = redis.StrictRedis(
         host=config.get('REDIS', 'host', fallback='localhost'),
-        db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
+        db=config.getint('REDIS', 'db', fallback=0), decode_responses=True)
     return day, day.strftime('%Y%m%d') in (s.get('TradingDay'), s.get('LastTradingDay'))
 
 
@@ -134,12 +132,14 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
                         continue
                     # logger.info(f'inst_data: {inst_data}')
                     code = inst_data['PRODUCTGROUPID'].strip()
+                    if code in IGNORE_INST_LIST:
+                        continue
                     name = inst_data['PRODUCTNAME'].strip()
                     if code not in inst_name_dict:
                         inst_name_dict[code] = name
                     exchange_str = ExchangeType.SHFE
                     # 上期能源的四个品种
-                    if code in ['sc', 'bc', 'nr', 'lu']:
+                    if code in INE_INST_LIST:
                         exchange_str = ExchangeType.INE
                     DailyBar.objects.update_or_create(
                         code=code + inst_data['DELIVERYMONTH'],
@@ -182,6 +182,8 @@ async def update_from_czce(day: datetime.datetime) -> bool:
          '-65.00', '13,826', '59,140', '-10,760', '82,305.24', '']
                     """
                     # print(f'inst_data: {inst_data}')
+                    if re.findall('[A-Za-z]+', inst_data[0])[0] in IGNORE_INST_LIST:
+                        continue
                     close = inst_data[5].replace(',', '') if Decimal(inst_data[5].replace(',', '')) > 0.1 \
                         else inst_data[6].replace(',', '')
                     DailyBar.objects.update_or_create(
@@ -227,6 +229,8 @@ async def update_from_dce(day: datetime.datetime) -> bool:
     ['豆一', '1611', '3,760', '3,760', '3,760', '3,760', '3,860', '3,760', '-100', '-100', '2', '0', '0', '7.52']
                     """
                     if '小计' in inst_data[0]:
+                        continue
+                    if DCE_NAME_CODE[inst_data[0]] in IGNORE_INST_LIST:
                         continue
                     DailyBar.objects.update_or_create(
                         code=DCE_NAME_CODE[inst_data[0]] + inst_data[1],
@@ -280,6 +284,8 @@ async def update_from_cffex(day: datetime.datetime) -> bool:
                     """
                     # 不存储期权合约
                     if len(inst_data.findtext('instrumentid').strip()) > 6:
+                        continue
+                    if inst_data.findtext('productid').strip() in IGNORE_INST_LIST:
                         continue
                     DailyBar.objects.update_or_create(
                         code=inst_data.findtext('instrumentid').strip(),
@@ -758,7 +764,9 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
         if day is None:
             day = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
         day_str = day.strftime('%Y%m%d')
-        contract_dict = {}
+        redis_client = redis.StrictRedis(
+            host=config.get('REDIS', 'host', fallback='localhost'),
+            db=config.getint('REDIS', 'db', fallback=0), decode_responses=True)
         async with aiohttp.ClientSession() as session:
 
             # 上期所
@@ -774,9 +782,11 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
                     """
                     # logger.info(f'inst_data: {inst_data}')
                     code = re.findall('[A-Za-z]+', inst_data['INSTRUMENTID'])[0]
+                    if code in IGNORE_INST_LIST:
+                        continue
+                    exchange = ExchangeType.INE if code in INE_INST_LIST else ExchangeType.SHFE
                     limit_ratio = str_to_number(inst_data['UPPER_VALUE'])
-                    if code not in contract_dict:
-                        contract_dict[code] = limit_ratio
+                    redis_client.set(f"LIMITRATIO:{exchange}:{code}:{inst_data['INSTRUMENTID']}", limit_ratio)
             # 大商所
             async with session.post(f'http://{dce_ip}/publicweb/notificationtips/exportDayTradPara.html',
                                     data={'exportFlag': 'txt'}) as response:
@@ -796,9 +806,10 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
 ['a2201','0.12','7,290','0.08','4,860','0.08','6,561','5,589','30,000','15,000']
                     """
                     code = re.findall('[A-Za-z]+', inst_data[0])[0]
+                    if code in IGNORE_INST_LIST:
+                        continue
                     limit_ratio = str_to_number(inst_data[5])
-                    if code not in contract_dict:
-                        contract_dict[code] = limit_ratio
+                    redis_client.set(f"LIMITRATIO:{ExchangeType.DCE}:{code}:{inst_data[0]}", limit_ratio)
             # 郑商所
             async with session.get(f'http://{czce_ip}/cn/DFSStaticFiles/Future/{day.year}/{day_str}/'
                                    f'FutureDataClearParams.txt') as response:
@@ -812,9 +823,10 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
 ['AP201','8,148.00','N','0','10','±9','5.00','0.00','20.00','200','']
                     """
                     code = re.findall('[A-Za-z]+', inst_data[0])[0]
+                    if code in IGNORE_INST_LIST:
+                        continue
                     limit_ratio = str_to_number(inst_data[5][1:]) / 100
-                    if code not in contract_dict:
-                        contract_dict[code] = limit_ratio
+                    redis_client.set(f"LIMITRATIO:{ExchangeType.CZCE}:{code}:{inst_data[0]}", limit_ratio)
             # 中金所
             async with session.get(f"http://{cffex_ip}/sj/jycs/{day.strftime('%Y%m/%d')}/index.xml") as response:
                 rst = await response.text()
@@ -837,17 +849,20 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
                     <LONG_LIMIT>1200</LONG_LIMIT>
                     </INDEX>
                     """
+                    inst_id = inst_data.findtext('INSTRUMENT_ID').strip()
                     # 不存储期权合约
-                    if len(inst_data.findtext('INSTRUMENT_ID').strip()) > 6:
+                    if len(inst_id) > 6:
                         continue
                     code = inst_data.findtext('PRODUCT_ID').strip()
+                    if code in IGNORE_INST_LIST:
+                        continue
                     limit_ratio = str_to_number(inst_data.findtext('UPPER_VALUE').strip())
-                    if code not in contract_dict:
-                        contract_dict[code] = limit_ratio
+                    redis_client.set(f"LIMITRATIO:{ExchangeType.CFFEX}:{code}:{inst_id}", limit_ratio)
             # 保存数据
-            for code, ratio in contract_dict.items():
-                inst = Instrument.objects.filter(product_code=code).first()
-                if inst:
+            for inst in Instrument.objects.all():
+                ratio = redis_client.get(f"LIMITRATIO:{inst.exchange}:{inst.product_code}:{inst.main_code}")
+                if ratio:
+                    ratio = str_to_number(ratio)
                     inst.up_limit_ratio = ratio
                     inst.down_limit_ratio = ratio
                     inst.save(update_fields=['up_limit_ratio', 'down_limit_ratio'])

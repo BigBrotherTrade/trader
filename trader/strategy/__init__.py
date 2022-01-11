@@ -39,11 +39,11 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
         self.io_loop = io_loop or asyncio.get_running_loop()
         self.redis_client = aioredis.from_url(
             f"redis://{config.get('REDIS', 'host', fallback='localhost')}:"
-            f"{config.getint('REDIS', 'port', fallback=6379)}/{config.getint('REDIS', 'db', fallback=1)}",
+            f"{config.getint('REDIS', 'port', fallback=6379)}/{config.getint('REDIS', 'db', fallback=0)}",
             decode_responses=True)
         self.raw_redis = redis.StrictRedis(host=config.get('REDIS', 'host', fallback='localhost'),
                                            port=config.getint('REDIS', 'port', fallback=6379),
-                                           db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
+                                           db=config.getint('REDIS', 'db', fallback=0), decode_responses=True)
         self.sub_client = self.redis_client.pubsub()
         self.initialized = False
         self.sub_tasks = list()
