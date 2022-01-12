@@ -44,7 +44,7 @@ class TradeStrategy(BaseModule):
         self.__market_response_format = config.get('MSG_CHANNEL', 'market_response_format')
         self.__trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
         self.__request_format = config.get('MSG_CHANNEL', 'request_format')
-        self.__ignore_inst_list = config.get('TRADE', 'ignore_inst').split(',')
+        self.__ignore_inst_list = config.get('TRADE', 'ignore_inst', fallback="WH,bb,JR,RI,RS,LR,PM,im").split(',')
         self.__request_id = random.randint(0, 65535)
         self.__order_ref = random.randint(0, 999)
         self.__strategy = Strategy.objects.get(name=name)
@@ -144,8 +144,10 @@ class TradeStrategy(BaseModule):
                 await self.cancel_order(order)
         # await self.force_close_all()
         # 获取持仓合约的tick数据
+        # await self.SubscribeMarketData(['sn2202', 'rr2203'])
 
     async def stop(self):
+        # await self.UnSubscribeMarketData(['sn2202', 'rr2203'])
         pass
 
     def next_order_ref(self):

@@ -21,7 +21,7 @@ if sys.platform == 'darwin':
 elif sys.platform == 'win32':
     sys.path.append(r'D:\github\dashboard')
 else:
-    sys.path.append('/root/dashboard')
+    sys.path.append('/root/gitee/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
