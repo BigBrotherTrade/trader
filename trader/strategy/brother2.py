@@ -124,25 +124,15 @@ class TradeStrategy(BaseModule):
         await self.query('TradingAccount')
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
-        # await self.processing_signal3()
-        # await self.refresh_instrument()
-        # await self.collect_tick_stop()
-        # await self.collect_quote()
-        # day = datetime.datetime.strptime('20161031', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
-        # for inst in self.__strategy.instruments.all():
-        #     # self.calc_signal(inst, day)
-        #     self.process_signal(inst)
         order_list = await self.query('Order')
         for order in order_list:
             # 未成交订单
-            # print(self.print_order(order))
             if int(order['OrderStatus']) in range(1, 5) and \
                             order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
                 direct_str = '多' if order['Direction'] == ApiStruct.D_Buy else '空'
                 logger.info(f"撤销未成交订单: 合约{order['InstrumentID']} {direct_str}单 {order['VolumeTotal']}手 "
                             f"价格{order['LimitPrice']}")
                 await self.cancel_order(order)
-        # await self.force_close_all()
         # 获取持仓合约的tick数据
         # await self.SubscribeMarketData(['sn2202', 'rr2203'])
 
@@ -407,7 +397,7 @@ class TradeStrategy(BaseModule):
             logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
     @staticmethod
-    def print_trade(trade: dict) -> str:
+    def get_trade_string(trade: dict) -> str:
         return f"成交订单: {trade['OrderRef']}, {trade['ExchangeID']}.{trade['InstrumentID']} " \
                f"{OffsetFlag.values[trade['OffsetFlag']]}{DirectionType.values[trade['Direction']]}" \
                f"已成交{trade['Volume']}手 成交价格:{trade['LimitPrice']} 成交时间:{trade['TradeTime']}"
@@ -418,8 +408,7 @@ class TradeStrategy(BaseModule):
         try:
             signal = None
             order_ref = channel.split(':')[-1]
-            # logger.info(f'OnRtnTrade order_ref: {order_ref}, trade: {trade}')
-            logger.info(f"成交回报: {self.print_trade(trade)}")
+            logger.info(f"成交回报: {self.get_trade_string(trade)}")
             inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', trade['InstrumentID'])[0])
             order = Order.objects.filter(order_ref=order_ref).first()
             if trade['OffsetFlag'] == ApiStruct.OF_Open:
@@ -495,7 +484,7 @@ class TradeStrategy(BaseModule):
             logger.error('OnRtnTrade failed: %s', repr(ee), exc_info=True)
 
     @staticmethod
-    def print_order(order: dict) -> str:
+    def get_order_string(order: dict) -> str:
         order_str = f"订单号: {order['OrderRef']}, {order['ExchangeID']}.{order['InstrumentID']} " \
                f"{OffsetFlag.values[order['CombOffsetFlag']]}{DirectionType.values[order['Direction']]}" \
                f"{order['VolumeTotalOriginal']}手 价格:{order['LimitPrice']} 报单时间:{order['InsertTime']} " \
@@ -511,8 +500,7 @@ class TradeStrategy(BaseModule):
     async def OnRtnOrder(self, channel, order: dict):
         try:
             order_ref = channel.split(':')[-1]
-            # logger.info('%s 开多%s手 价格: %s', inst, signal.volume, price)
-            logger.info(f"订单回报: {self.print_order(order)}")
+            logger.info(f"订单回报: {self.get_order_string(order)}")
             inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', order['InstrumentID'])[0])
             Order.objects.update_or_create(order_ref=order_ref, defaults={
                 'broker': self.__broker, 'strategy': self.__strategy, 'instrument': inst,
@@ -525,48 +513,50 @@ class TradeStrategy(BaseModule):
                     order['InsertDate']+order['InsertTime'], '%Y%m%d%H:%M:%S').replace(
                     tzinfo=pytz.FixedOffset(480)),
                 'update_time': datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))})
-            # 处理由于委托价格超出交易所涨跌停板而被撤单的报单，将委托价格下调80%，重新报单
-            # if order['OrderStatus'] == ApiStruct.OST_Canceled:
-            #     last_bar = DailyBar.objects.filter(
-            #         exchange=inst.exchange, code=order['InstrumentID']).order_by('-time').first()
-            #     volume = int(order['VolumeTotalOriginal'])
-            #     if order['CombOffsetFlag'] == ApiStruct.OF_Open:
-            #         if order['Direction'] == ApiStruct.D_Buy:
-            #             new_price = (Decimal(order['LimitPrice']) - last_bar.settlement) * Decimal(0.8)
-            #             if new_price / last_bar.settlement < 0.01:
-            #                 logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
-            #                 return
-            #             new_price = price_round(last_bar.settlement + new_price, inst.price_tick)
-            #             logger.info('%s 重新尝试开多%s手 价格: %s', inst, volume, new_price)
-            #             self.io_loop.create_task(self.buy(inst, new_price, volume))
-            #         else:
-            #             new_price = (last_bar.settlement - Decimal(order['LimitPrice'])) * Decimal(0.8)
-            #             if new_price / last_bar.settlement < 0.01:
-            #                 logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
-            #                 return
-            #             new_price = price_round(last_bar.settlement - new_price, inst.price_tick)
-            #             logger.info('%s 重新尝试开空%s手 价格: %s', inst, volume, new_price)
-            #             self.io_loop.create_task(self.sell_short(inst, new_price, volume))
-            #     else:
-            #         pos = Trade.objects.filter(
-            #             close_time__isnull=True, code=order['InstrumentID'], broker=self.__broker,
-            #             strategy=self.__strategy, instrument=inst, shares__gt=0).first()
-            #         if order['Direction'] == ApiStruct.D_Buy:
-            #             new_price = (Decimal(order['LimitPrice']) - last_bar.settlement) * Decimal(0.8)
-            #             if new_price / last_bar.settlement < 0.01:
-            #                 logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
-            #                 return
-            #             new_price = price_round(last_bar.settlement + new_price, inst.price_tick)
-            #             logger.info('%s 重新尝试买平%s手 价格: %s', inst, volume, new_price)
-            #             self.io_loop.create_task(self.buy_cover(pos, new_price, volume))
-            #         else:
-            #             new_price = (last_bar.settlement - Decimal(order['LimitPrice'])) * Decimal(0.8)
-            #             if new_price / last_bar.settlement < 0.01:
-            #                 logger.info('%s %s 报单重试次数过多， 放弃。', order['InstrumentID'], new_price)
-            #                 return
-            #             new_price = price_round(last_bar.settlement - new_price, inst.price_tick)
-            #             logger.info('%s 重新尝试卖平%s手 价格: %s', inst, volume, new_price)
-            #             self.io_loop.create_task(self.sell(pos, new_price, volume))
+            # 处理由于委托价格超出交易所涨跌停板而被撤单的报单，将委托价格下调50%，重新报单
+            if order['OrderStatus'] == ApiStruct.OST_Canceled and \
+                    order['OrderSubmitStatus'] == ApiStruct.OSS_InsertRejected:
+                last_bar = DailyBar.objects.filter(
+                    exchange=inst.exchange, code=order['InstrumentID']).order_by('-time').first()
+                volume = int(order['VolumeTotalOriginal'])
+                price = Decimal(order['LimitPrice'])
+                if order['CombOffsetFlag'] == ApiStruct.OF_Open:
+                    if order['Direction'] == ApiStruct.D_Buy:
+                        price = (price - last_bar.settlement) * Decimal(0.5)
+                        if price / last_bar.settlement < 0.01:
+                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            return
+                        new_price = price_round(last_bar.settlement + price, inst.price_tick)
+                        logger.info(f"{inst} 以价格:{price}开多{volume}手 重新报单...")
+                        self.io_loop.create_task(self.buy(inst, new_price, volume))
+                    else:
+                        price = (last_bar.settlement - price) * Decimal(0.5)
+                        if price / last_bar.settlement < 0.01:
+                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            return
+                        new_price = price_round(last_bar.settlement - price, inst.price_tick)
+                        logger.info(f"{inst} 以价格:{price}开空{volume}手 重新报单...")
+                        self.io_loop.create_task(self.sell_short(inst, new_price, volume))
+                else:
+                    pos = Trade.objects.filter(
+                        close_time__isnull=True, code=order['InstrumentID'], broker=self.__broker,
+                        strategy=self.__strategy, instrument=inst, shares__gt=0).first()
+                    if order['Direction'] == ApiStruct.D_Buy:
+                        price = (price - last_bar.settlement) * Decimal(0.5)
+                        if price / last_bar.settlement < 0.01:
+                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            return
+                        price = price_round(last_bar.settlement + price, inst.price_tick)
+                        logger.info(f"{inst} 以价格:{price}买平{volume}手 重新报单...")
+                        self.io_loop.create_task(self.buy_cover(pos, price, volume))
+                    else:
+                        price = (last_bar.settlement - price) * Decimal(0.5)
+                        if price / last_bar.settlement < 0.01:
+                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            return
+                        price = price_round(last_bar.settlement - price, inst.price_tick)
+                        logger.info(f"{inst} 以价格:{price}卖平{volume}手 重新报单...")
+                        self.io_loop.create_task(self.sell(pos, price, volume))
         except Exception as ee:
             logger.error('OnRtnOrder failed: %s', repr(ee), exc_info=True)
 
