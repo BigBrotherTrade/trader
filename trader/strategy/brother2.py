@@ -105,7 +105,7 @@ class TradeStrategy(BaseModule):
                 Trade.objects.update_or_create(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst,
                     code=pos['InstrumentID'],
-                    direction=DirectionType.LONG if pos['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
+                    direction=DirectionType.values[pos['Direction']],
                     close_time__isnull=True,
                     defaults={
                         'open_time': datetime.datetime.strptime(
@@ -137,7 +137,6 @@ class TradeStrategy(BaseModule):
             # 未成交订单
             if int(order['OrderStatus']) in range(1, 5) and \
                             order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
-                self.__activeOrders[order['OrderRef']] = order
                 direct_str = '多' if order['Direction'] == ApiStruct.D_Buy else '空'
                 logger.info(f"撤销未成交订单: 合约{order['InstrumentID']} {direct_str}单 {order['VolumeTotal']}手 "
                             f"价格{order['LimitPrice']}")
@@ -184,10 +183,7 @@ class TradeStrategy(BaseModule):
         async for msg in pb.listen():
             # print(f"query_reader msg: {msg}")
             msg_dict = json.loads(msg['data'])
-            if 'empty' in msg_dict:
-                if msg_dict['empty'] is False:
-                    msg_list.append(msg_dict)
-            else:
+            if 'empty' not in msg_dict or not msg_dict['empty']:
                 msg_list.append(msg_dict)
             if 'bIsLast' not in msg_dict or msg_dict['bIsLast']:
                 return msg_list
@@ -208,7 +204,6 @@ class TradeStrategy(BaseModule):
             await sub_client.punsubscribe()
             await sub_client.close()
             return task.result()
-
         except Exception as e:
             logger.error('%s failed: %s', query_type, repr(e), exc_info=True)
             if sub_client and channel_rsp_qry:
@@ -230,7 +225,6 @@ class TradeStrategy(BaseModule):
             await sub_client.punsubscribe()
             await sub_client.close()
             return task.result()
-
         except Exception as e:
             logger.error('SubscribeMarketData failed: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_dat:
@@ -252,7 +246,6 @@ class TradeStrategy(BaseModule):
             await sub_client.punsubscribe()
             await sub_client.close()
             return task.result()
-
         except Exception as e:
             logger.error('UnSubscribeMarketData failed: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_dat:
@@ -272,11 +265,10 @@ class TradeStrategy(BaseModule):
         return rst
 
     async def sell(self, pos: Trade, limit_price: Decimal, volume: int):
-        # 上期所区分平今和平昨
         close_flag = ApiStruct.OF_Close
         if pos.open_time.date() == datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)).date() \
                 and pos.instrument.exchange == ExchangeType.SHFE:
-            close_flag = ApiStruct.OF_CloseToday
+            close_flag = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
         rst = await self.ReqOrderInsert(
             InstrumentID=pos.code,
             VolumeTotalOriginal=volume,
@@ -299,11 +291,10 @@ class TradeStrategy(BaseModule):
         return rst
 
     async def buy_cover(self, pos: Trade, limit_price: Decimal, volume: int):
-        # 上期所区分平今和平昨
         close_flag = ApiStruct.OF_Close
         if pos.open_time.date() == datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)).date() \
                 and pos.instrument.exchange == ExchangeType.SHFE:
-            close_flag = ApiStruct.OF_CloseToday
+            close_flag = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
         rst = await self.ReqOrderInsert(
             InstrumentID=pos.code,
             VolumeTotalOriginal=volume,
@@ -342,14 +333,14 @@ class TradeStrategy(BaseModule):
             await asyncio.wait_for(task, HANDLER_TIME_OUT)
             await sub_client.punsubscribe()
             await sub_client.close()
-            logger.info('ReqOrderInsert, rst: %s', task.result())
+            logger.info('ReqOrderInsert, rst: %s', task.result()['StatusMsg'])
             return task.result()
         except Exception as e:
             logger.error('ReqOrderInsert failed: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rtn_odr:
                 await sub_client.unsubscribe()
                 await sub_client.close()
-            return None
+            return False
 
     async def cancel_order(self, order: dict):
         sub_client = None
@@ -377,7 +368,7 @@ class TradeStrategy(BaseModule):
             if sub_client and sub_client.in_pubsub and channel_rsp_odr_act:
                 await sub_client.unsubscribe()
                 await sub_client.close()
-            return None
+            return False
 
     @param_function(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
     async def OnRtnDepthMarketData(self, channel, tick: dict):
@@ -414,13 +405,20 @@ class TradeStrategy(BaseModule):
         except Exception as ee:
             logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
+    @staticmethod
+    def print_trade(trade: dict) -> str:
+        return f"成交订单: {trade['OrderRef']}, {trade['ExchangeID']}.{trade['InstrumentID']} " \
+               f"{OffsetFlag.values[trade['OffsetFlag']]}{DirectionType.values[trade['Direction']]}" \
+               f"已成交{trade['Volume']}手 成交价格:{trade['LimitPrice']} 成交时间:{trade['TradeTime']}"
+
     # TODO 有时更新仓位计算会出现错误，导致同样的品种头寸被插入而不是更新
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnTrade:*')
     async def OnRtnTrade(self, channel, trade: dict):
         try:
             signal = None
             order_ref = channel.split(':')[-1]
-            logger.info(f'OnRtnTrade order_ref: {order_ref}, trade: {trade}')
+            # logger.info(f'OnRtnTrade order_ref: {order_ref}, trade: {trade}')
+            logger.info(f"成交回报: {self.print_trade(trade)}")
             inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', trade['InstrumentID'])[0])
             order = Order.objects.filter(order_ref=order_ref).first()
             if trade['OffsetFlag'] == ApiStruct.OF_Open:
@@ -429,14 +427,12 @@ class TradeStrategy(BaseModule):
                     code=trade['InstrumentID'],
                     open_time__startswith='{}-{}-{}'.format(
                         trade['TradingDay'][0:4], trade['TradingDay'][4:6], trade['TradingDay'][6:8]),
-                    direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Buy
-                    else DirectionType.SHORT, close_time__isnull=True).first()
+                    direction=DirectionType.values[trade['Direction']], close_time__isnull=True).first()
                 if last_trade is None:
                     last_trade = Trade.objects.create(
                         broker=self.__broker, strategy=self.__strategy, instrument=inst,
                         code=trade['InstrumentID'], open_order=order,
-                        direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Buy
-                        else DirectionType.SHORT,
+                        direction=DirectionType.values[trade['Direction']],
                         open_time=datetime.datetime.strptime(
                             trade['TradeDate']+trade['TradeTime'], '%Y%m%d%H:%M:%S').replace(
                             tzinfo=pytz.FixedOffset(480)),
@@ -464,8 +460,7 @@ class TradeStrategy(BaseModule):
                 last_trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst,
                     code=trade['InstrumentID'],
-                    direction=DirectionType.LONG if trade['Direction'] == ApiStruct.D_Sell
-                    else DirectionType.SHORT, close_time__isnull=True).first()
+                    direction=DirectionType.values[trade['Direction']]).first()
                 if last_trade is not None:
                     if last_trade.closed_shares is None:
                         last_trade.closed_shares = 0
@@ -498,19 +493,33 @@ class TradeStrategy(BaseModule):
         except Exception as ee:
             logger.error('OnRtnTrade failed: %s', repr(ee), exc_info=True)
 
+    @staticmethod
+    def print_order(order: dict) -> str:
+        order_str = f"订单号: {order['OrderRef']}, {order['ExchangeID']}.{order['InstrumentID']} " \
+               f"{OffsetFlag.values[order['CombOffsetFlag']]}{DirectionType.values[order['Direction']]}" \
+               f"{order['VolumeTotalOriginal']}手 价格:{order['LimitPrice']} 报单时间:{order['InsertTime']} " \
+               f"提交状态:{OrderSubmitStatus.values[order['OrderSubmitStatus']]} "
+        if order['OrderSubmitStatus'] != OrderSubmitStatus.Accepted:
+            order_str += f"消息:{order['StatusMsg']}"
+        else:
+            order_str += f"成交状态:{OrderStatus.values[order['OrderStatus']]} 消息:{order['StatusMsg']} " \
+                         f"成交数量:{order['VolumeTraded']} 剩余数量:{order['VolumeTotal']}"
+        return order_str
+
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnOrder:*')
     async def OnRtnOrder(self, channel, order: dict):
         try:
             order_ref = channel.split(':')[-1]
-            logger.info(f'OnRtnOrder order_ref: {order_ref}, order: {order}')
+            # logger.info('%s 开多%s手 价格: %s', inst, signal.volume, price)
+            logger.info(f"订单回报: {self.print_order(order)}")
             inst = Instrument.objects.get(product_code=re.findall('[A-Za-z]+', order['InstrumentID'])[0])
             Order.objects.update_or_create(order_ref=order_ref, defaults={
                 'broker': self.__broker, 'strategy': self.__strategy, 'instrument': inst,
                 'code': order['InstrumentID'], 'front': order['FrontID'], 'session': order['SessionID'],
                 'price': order['LimitPrice'], 'volume': order['VolumeTotalOriginal'],
-                'direction': DirectionType.LONG if order['Direction'] == ApiStruct.D_Buy else DirectionType.SHORT,
-                'offset_flag': OffsetFlag.OPEN if order['CombOffsetFlag'] == ApiStruct.OF_Open else OffsetFlag.CLOSE,
-                'status': order['OrderStatus'],
+                'direction': DirectionType.values[order['Direction']],
+                'offset_flag': OffsetFlag.values[order['CombOffsetFlag']],
+                'status': OrderStatus.values[order['OrderStatus']],
                 'send_time': datetime.datetime.strptime(
                     order['InsertDate']+order['InsertTime'], '%Y%m%d%H:%M:%S').replace(
                     tzinfo=pytz.FixedOffset(480)),
@@ -765,50 +774,6 @@ class TradeStrategy(BaseModule):
             logger.error('collect_quote failed: %s', e, exc_info=True)
         logger.info('盘后计算完毕!')
 
-    # @param_function(crontab='57 8 * * *')
-    async def collect_day_tick_start(self):
-        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
-        day, trading = await is_trading_day(day)
-        if trading:
-            logger.info('订阅全品种行情, %s %s', day, trading)
-            inst_set = list()
-            for inst in Instrument.objects.all():
-                inst_set += inst.all_inst.split(',')
-            await self.SubscribeMarketData(inst_set)
-
-    # @param_function(crontab='16 15 * * *')
-    async def collect_day_tick_stop(self):
-        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
-        day, trading = await is_trading_day(day)
-        if trading:
-            logger.info('取消订阅全品种行情, %s %s', day, trading)
-            inst_set = list()
-            for inst in Instrument.objects.all():
-                inst_set += inst.all_inst.split(',')
-            await self.UnSubscribeMarketData(inst_set)
-
-    # @param_function(crontab='57 20 * * *')
-    async def collect_night_tick_start(self):
-        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
-        day, trading = await is_trading_day(day)
-        if trading:
-            logger.info('订阅全品种行情, %s %s', day, trading)
-            inst_set = list()
-            for inst in Instrument.objects.all():
-                inst_set += inst.all_inst.split(',')
-            await self.SubscribeMarketData(inst_set)
-
-    # @param_function(crontab='31 2 * * *')
-    async def collect_night_tick_stop(self):
-        day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
-        day, trading = await is_trading_day(day)
-        if trading:
-            logger.info('取消订阅全品种行情, %s %s', day, trading)
-            inst_set = list()
-            for inst in Instrument.objects.all():
-                inst_set += inst.all_inst.split(',')
-            await self.UnSubscribeMarketData(inst_set)
-
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
         today, trading = await is_trading_day(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
@@ -999,16 +964,14 @@ class TradeStrategy(BaseModule):
             self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
         elif signal.type == SignalType.BUY_COVER:
             pos = Trade.objects.filter(
-                broker=self.__broker, strategy=self.__strategy,
-                code=signal.code, close_time__isnull=True, direction=DirectionType.SHORT,
-                instrument=inst, shares__gt=0).first()
+                broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
+                close_time__isnull=True, direction=DirectionType.get_choice(DirectionType.SHORT).label).first()
             logger.info('%s 平空%s手 价格: %s', pos.instrument, signal.volume, price)
             self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
         elif signal.type == SignalType.SELL:
             pos = Trade.objects.filter(
-                broker=self.__broker, strategy=self.__strategy,
-                code=signal.code, close_time__isnull=True, direction=DirectionType.LONG,
-                instrument=inst, shares__gt=0).first()
+                broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
+                close_time__isnull=True, direction=DirectionType.get_choice(DirectionType.LONG).label).first()
             logger.info('%s 平多%s手 价格: %s', pos.instrument, signal.volume, price)
             self.io_loop.create_task(self.sell(pos, price, signal.volume))
         elif signal.type == SignalType.ROLL_CLOSE:
