@@ -50,8 +50,8 @@ class OperatorType(DjangoChoices):
 
 
 class DirectionType(DjangoChoices):
-    LONG = C(label='多', value='0')
-    SHORT = C(label='空', value='1')
+    LONG = C(label='多', value=b'0'[0])
+    SHORT = C(label='空', value=b'1'[0])
 
 
 class OffsetFlag(DjangoChoices):  # 开平标志
@@ -65,25 +65,25 @@ class OffsetFlag(DjangoChoices):  # 开平标志
 
 
 class OrderStatus(DjangoChoices):  # 报单状态
-    AllTraded = C(value='0', label='全部成交')
-    PartTradedQueueing = C(value='1', label='部分成交还在队列中')
-    PartTradedNotQueueing = C(value='2', label='部分成交不在队列中')
-    NoTradeQueueing = C(value='3', label='未成交还在队列中')
-    NoTradeNotQueueing = C(value='4', label='未成交不在队列中')
-    Canceled = C(value='5', label='撤单')
-    Unknown = C(value='a', label='未知')
-    NotTouched = C(value='b', label='尚未触发')
-    Touched = C(value='c', label='已触发')
+    AllTraded = C(value=b'0'[0], label='全部成交')
+    PartTradedQueueing = C(value=b'1'[0], label='部分成交还在队列中')
+    PartTradedNotQueueing = C(value=b'2'[0], label='部分成交不在队列中')
+    NoTradeQueueing = C(value=b'3'[0], label='未成交还在队列中')
+    NoTradeNotQueueing = C(value=b'4'[0], label='未成交不在队列中')
+    Canceled = C(value=b'5'[0], label='撤单')
+    Unknown = C(value=b'a'[0], label='未知')
+    NotTouched = C(value=b'b'[0], label='尚未触发')
+    Touched = C(value=b'c'[0], label='已触发')
 
 
 class OrderSubmitStatus(DjangoChoices):  # 报单提交状态
-    InsertSubmitted = C(value='0', label='已经提交')
-    CancelSubmitted = C(value='1', label='撤单已经提交')
-    ModifySubmitted = C(value='2', label='修改已经提交')
-    Accepted = C(value='3', label='已经接受')
-    InsertRejected = C(value='4', label='报单已经被拒绝')
-    CancelRejected = C(value='5', label='撤单已经被拒绝')
-    ModifyRejected = C(value='6', label='改单已经被拒绝')
+    InsertSubmitted = C(value=b'0'[0], label='已经提交')
+    CancelSubmitted = C(value=b'1'[0], label='撤单已经提交')
+    ModifySubmitted = C(value=b'2'[0], label='修改已经提交')
+    Accepted = C(value=b'3'[0], label='已经接受')
+    InsertRejected = C(value=b'4'[0], label='报单已经被拒绝')
+    CancelRejected = C(value=b'5'[0], label='撤单已经被拒绝')
+    ModifyRejected = C(value=b'6'[0], label='改单已经被拒绝')
 
 
 DCE_NAME_CODE = {

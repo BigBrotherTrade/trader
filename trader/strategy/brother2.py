@@ -135,6 +135,7 @@ class TradeStrategy(BaseModule):
         order_list = await self.query('Order')
         for order in order_list:
             # 未成交订单
+            # print(self.print_order(order))
             if int(order['OrderStatus']) in range(1, 5) and \
                             order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
                 direct_str = '多' if order['Direction'] == ApiStruct.D_Buy else '空'
