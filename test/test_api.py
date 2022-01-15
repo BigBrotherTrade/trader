@@ -36,7 +36,6 @@ class APITest(asynctest.TestCase):
         self.redis_client = redis.StrictRedis(
             host=config.get('REDIS', 'host', fallback='localhost'),
             db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
-        self.redis_client.get("LastTradingDay")
         self.last_trading_day = datetime.datetime.strptime(self.redis_client.get("LastTradingDay"), '%Y%m%d')
 
     def tearDown(self) -> None:
