@@ -57,6 +57,11 @@ class DirectionType(DjangoChoices):
 class CombOffsetFlag(DjangoChoices):  # 订单开平标志
     Open = C(label='开', value='0')
     Close = C(label='平', value='1')
+    ForceClose = C(label='强平', value='2')
+    CloseToday = C(label='平', value='3')
+    CloseYesterday = C(label='平昨', value='4')
+    ForceOff = C(label='强减', value='5')
+    LocalForceClose = C(label='本地强平', value='6')
 
 
 class OffsetFlag(DjangoChoices):  # 开平标志
