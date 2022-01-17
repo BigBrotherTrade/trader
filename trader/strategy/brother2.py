@@ -92,16 +92,6 @@ class TradeStrategy(BaseModule):
             try:
                 p_code = self.__re_extract_code.match(pos['InstrumentID']).group(1)
                 inst = Instrument.objects.get(product_code=p_code)
-                # bar = DailyBar.objects.filter(
-                #     exchange=inst.exchange, code=pos['InstrumentID']).order_by('-time').first()
-                # if not bar:
-                #     logger.error(f"update_position 未发现日线数据 {pos['InstrumentID']}")
-                #     continue
-                # if pos['Direction'] == DirectionType.LONG:
-                #     profit = Decimal(bar.settlement) - Decimal(pos['OpenPrice'])
-                # else:
-                #     profit = Decimal(pos['OpenPrice']) - Decimal(bar.settlement)
-                # profit = profit * Decimal(pos['Volume']) * inst.volume_multiple
                 profit = pos['PositionProfitByTrade']
                 trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=pos['InstrumentID'],
@@ -140,12 +130,8 @@ class TradeStrategy(BaseModule):
                 self.save_order(order)
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
-        # 获取持仓合约的tick数据
-        # await self.SubscribeMarketData(['sn2202', 'rr2203'])
-        await self.processing_signal3()
 
     async def stop(self):
-        # await self.UnSubscribeMarketData(['sn2202', 'rr2203'])
         pass
 
     def next_order_ref(self):
@@ -549,7 +535,7 @@ class TradeStrategy(BaseModule):
         return order_str
 
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnOrder:*')
-    async def OnRtnOrder(self, channel: str, order: dict):
+    async def OnRtnOrder(self, _: str, order: dict):
         try:
             if order["OrderSysID"]:
                 logger.info(f"订单回报: {self.get_order_string(order)}")
