@@ -130,7 +130,7 @@ class TradeStrategy(BaseModule):
                 self.save_order(order)
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
-        await self.refresh_instrument()
+        # await self.collect_quote()
 
     async def stop(self):
         pass
@@ -775,9 +775,7 @@ class TradeStrategy(BaseModule):
         微信报告
         """
         try:
-            day = datetime.datetime.today()
-            day = day.replace(tzinfo=pytz.FixedOffset(480))
-            day += datetime.timedelta(hours=8)
+            day = datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))
             _, trading = await is_trading_day(day)
             if not trading:
                 logger.info('今日是非交易日, 不计算任何数据。')
