@@ -613,7 +613,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                     trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
                 last_trade = Trade.objects.create(
                     broker=strategy.broker, strategy=strategy, instrument=inst,
-                    code=new_bar.code, direction=DirectionType.LONG,
+                    code=new_bar.code, direction=DirectionType.values[DirectionType.LONG],
                     open_time=cur_date, shares=1, filled_shares=1, avg_entry_price=new_bar.open)
                 cur_pos = cur_idx
             elif df.short_trend[idx] < df.long_trend[idx] and int(df.close[idx]) < int(df.low_line[idx-1]):
@@ -626,7 +626,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
                     trigger_time=prev_date, price=new_bar.open, volume=1, priority=PriorityType.LOW)
                 last_trade = Trade.objects.create(
                     broker=strategy.broker, strategy=strategy, instrument=inst,
-                    code=new_bar.code, direction=DirectionType.SHORT,
+                    code=new_bar.code, direction=DirectionType.values[DirectionType.SHORT],
                     open_time=cur_date, shares=1, filled_shares=1, avg_entry_price=new_bar.open)
                 cur_pos = cur_idx * -1
         elif cur_pos > 0 and prev_date > last_trade.open_time:
@@ -671,7 +671,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
             last_trade.avg_exit_price = df.open[cur_idx]
             last_trade.close_time = cur_date
             last_trade.closed_shares = 1
-            if last_trade.direction == DirectionType.LONG:
+            if last_trade.direction == DirectionType.values[DirectionType.LONG]:
                 last_trade.profit = (last_trade.avg_entry_price - Decimal(df.open[cur_idx])) * \
                                     inst.volume_multiple
             else:

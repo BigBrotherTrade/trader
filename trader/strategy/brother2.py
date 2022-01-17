@@ -130,7 +130,6 @@ class TradeStrategy(BaseModule):
                 self.save_order(order)
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
-        # await self.collect_quote()
 
     async def stop(self):
         pass
@@ -477,7 +476,7 @@ class TradeStrategy(BaseModule):
                         last_trade.close_time = datetime.datetime.strptime(
                             trade['TradeDate'] + trade['TradeTime'], '%Y%m%d%H:%M:%S').replace(
                             tzinfo=pytz.FixedOffset(480))
-                        if last_trade.direction == DirectionType.LONG:
+                        if last_trade.direction == DirectionType.values[DirectionType.LONG]:
                             profit_point = last_trade.avg_exit_price - last_trade.avg_entry_price
                         else:
                             profit_point = last_trade.avg_entry_price - last_trade.avg_exit_price
@@ -866,7 +865,7 @@ class TradeStrategy(BaseModule):
                 broker=self.__broker, strategy=self.__strategy,
                 instrument=inst, shares__gt=0, open_time__lt=day).first()
             roll_over = False
-            if pos is not None:
+            if pos:
                 pos_idx = df.index.get_loc(
                     pos.open_time.astimezone(pytz.FixedOffset(480)).date().isoformat())
                 roll_over = pos.code != inst.main_code
@@ -881,9 +880,9 @@ class TradeStrategy(BaseModule):
             signal_value = None
             price = None
             volume = None
-            if pos is not None:
+            if pos:
                 # 多头持仓
-                if pos.direction == DirectionType.LONG:
+                if pos.direction == DirectionType.values[DirectionType.LONG]:
                     hh = float(MainBar.objects.filter(
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
                         time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
@@ -964,12 +963,13 @@ class TradeStrategy(BaseModule):
                     price = self.calc_down_limit(inst, new_bar)
                 else:
                     logger.info('做空单手风险=%s,超出风控额度，放弃。', df.atr[idx] * inst.volume_multiple)
-            if signal is not None:
-                Signal.objects.update_or_create(
+            if signal:
+                sig, _ = Signal.objects.update_or_create(
                     code=inst.main_code,
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
                         'price': price, 'volume': volume, 'trigger_value': signal_value,
                         'priority': PriorityType.Normal, 'processed': False})
+                logger.debug(f"新信号：{sig}")
         except Exception as e:
             logger.error('calc_signal failed: %s', e, exc_info=True)
 
@@ -1002,7 +1002,7 @@ class TradeStrategy(BaseModule):
             pos = Trade.objects.filter(
                 broker=self.__broker, strategy=self.__strategy,
                 code=signal.code, close_time__isnull=True, instrument=inst, shares__gt=0).first()
-            if pos.direction == DirectionType.LONG:
+            if pos.direction == DirectionType.values[DirectionType.LONG]:
                 logger.info('%s->%s 多头换月平旧%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
                 self.io_loop.create_task(self.sell(pos, price, signal.volume))
             else:
@@ -1013,7 +1013,7 @@ class TradeStrategy(BaseModule):
                 Q(close_time__isnull=True) | Q(close_time__startswith=datetime.date.today()),
                 broker=self.__broker, strategy=self.__strategy,
                 shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
-            if pos.direction == DirectionType.LONG:
+            if pos.direction == DirectionType.values[DirectionType.LONG]:
                 logger.info('%s->%s 多头换月开新%s手 价格: %s', pos.code, inst.main_code, signal.volume, price)
                 self.io_loop.create_task(self.buy(inst, price, signal.volume))
             else:
@@ -1028,7 +1028,7 @@ class TradeStrategy(BaseModule):
                 if trade.closed_shares:
                     shares -= trade.closed_shares
                 bar = DailyBar.objects.filter(code=trade.code).order_by('-time').first()
-                if trade.direction == DirectionType.LONG:
+                if trade.direction == DirectionType.values[DirectionType.LONG]:
                     await self.sell(trade, self.calc_up_limit(trade.instrument, bar), shares)
                 else:
                     await self.buy_cover(trade, self.calc_down_limit(trade.instrument, bar), shares)
