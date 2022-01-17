@@ -121,7 +121,7 @@ class TradeStrategy(BaseModule):
             # 未成交订单
             if int(order['OrderStatus']) in range(1, 5) and \
                     order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
-                direct_str = '多' if order['Direction'] == DirectionType.LONG else '空'
+                direct_str = DirectionType.values[order['Direction']]
                 logger.info(f"撤销未成交订单: 合约{order['InstrumentID']} {direct_str}单 {order['VolumeTotal']}手 "
                             f"价格{order['LimitPrice']}")
                 await self.cancel_order(order)
@@ -130,6 +130,7 @@ class TradeStrategy(BaseModule):
                 self.save_order(order)
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
+        await self.refresh_instrument()
 
     async def stop(self):
         pass
@@ -418,14 +419,14 @@ class TradeStrategy(BaseModule):
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
                     # open_order=order,
                     open_time__lte=trade_time, close_time__isnull=True,
-                    direction=DirectionType.get_choice(trade['Direction']).label).first()
+                    direction=DirectionType.values[trade['Direction']]).first()
                 # print(connection.queries[-1]['sql'])
                 if last_trade is None:
                     new_trade = True
                     last_trade = Trade.objects.create(
                         broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
                         open_order=order if order else None,
-                        direction=DirectionType.get_choice(trade['Direction']).label,
+                        direction=DirectionType.values[trade['Direction']],
                         open_time=trade_time, shares=order.volume if order else trade['Volume'], cost=trade_cost,
                         filled_shares=trade['Volume'], avg_entry_price=trade['Price'], frozen_margin=trade_margin)
                 else:
@@ -454,8 +455,8 @@ class TradeStrategy(BaseModule):
                     code=trade['InstrumentID'], trigger_time__gte=self.__last_trading_day, volume=trade['Volume'],
                     strategy=self.__strategy, instrument=inst, processed=False).first()
             else:  # 平仓
-                open_direct = DirectionType.get_choice(DirectionType.LONG).label if \
-                    trade['Direction'] == DirectionType.SHORT else DirectionType.get_choice(DirectionType.SHORT).label
+                open_direct = DirectionType.values[DirectionType.LONG] if \
+                    trade['Direction'] == DirectionType.SHORT else DirectionType.values[DirectionType.SHORT]
                 last_trade = Trade.objects.filter(
                     Q(closed_shares__isnull=True) | Q(closed_shares__lt=F('shares')), shares=F('filled_shares'),
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
@@ -725,16 +726,18 @@ class TradeStrategy(BaseModule):
         inst_dict = defaultdict(dict)
         inst_list = await self.query('Instrument')
         for inst in inst_list:
-            if not inst['empty']:
-                if inst['IsTrading'] == 1 and inst['ProductClass'] == ApiStruct.PC_Futures and inst['StrikePrice'] == 0:
-                    if inst['ProductID'] in self.__ignore_inst_list or inst['LongMarginRatio'] > 1:
-                        continue
-                    inst_dict[inst['ProductID']][inst['InstrumentID']] = dict()
-                    inst_dict[inst['ProductID']][inst['InstrumentID']]['name'] = inst['InstrumentName']
-                    inst_dict[inst['ProductID']][inst['InstrumentID']]['exchange'] = inst['ExchangeID']
-                    inst_dict[inst['ProductID']][inst['InstrumentID']]['multiple'] = inst['VolumeMultiple']
-                    inst_dict[inst['ProductID']][inst['InstrumentID']]['price_tick'] = inst['PriceTick']
-                    inst_dict[inst['ProductID']][inst['InstrumentID']]['margin'] = inst['LongMarginRatio']
+            if inst['empty']:
+                continue
+            if inst['IsTrading'] == 1 and chr(inst['ProductClass']) == ApiStruct.PC_Futures and \
+                    int(str_to_number(inst['StrikePrice'])) == 0:
+                if inst['ProductID'] in self.__ignore_inst_list or inst['LongMarginRatio'] > 1:
+                    continue
+                inst_dict[inst['ProductID']][inst['InstrumentID']] = dict()
+                inst_dict[inst['ProductID']][inst['InstrumentID']]['name'] = inst['InstrumentName']
+                inst_dict[inst['ProductID']][inst['InstrumentID']]['exchange'] = inst['ExchangeID']
+                inst_dict[inst['ProductID']][inst['InstrumentID']]['multiple'] = inst['VolumeMultiple']
+                inst_dict[inst['ProductID']][inst['InstrumentID']]['price_tick'] = inst['PriceTick']
+                inst_dict[inst['ProductID']][inst['InstrumentID']]['margin'] = inst['LongMarginRatio']
         for code in inst_dict.keys():
             all_inst = ','.join(sorted(inst_dict[code].keys()))
             inst_data = list(inst_dict[code].values())[0]
@@ -988,13 +991,13 @@ class TradeStrategy(BaseModule):
         elif signal.type == SignalType.BUY_COVER:
             pos = Trade.objects.filter(
                 broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
-                close_time__isnull=True, direction=DirectionType.get_choice(DirectionType.SHORT).label).first()
+                close_time__isnull=True, direction=DirectionType.values[DirectionType.SHORT]).first()
             logger.info('%s 平空%s手 价格: %s', pos.instrument, signal.volume, price)
             self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
         elif signal.type == SignalType.SELL:
             pos = Trade.objects.filter(
                 broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
-                close_time__isnull=True, direction=DirectionType.get_choice(DirectionType.LONG).label).first()
+                close_time__isnull=True, direction=DirectionType.values[DirectionType.LONG]).first()
             logger.info('%s 平多%s手 价格: %s', pos.instrument, signal.volume, price)
             self.io_loop.create_task(self.sell(pos, price, signal.volume))
         elif signal.type == SignalType.ROLL_CLOSE:
