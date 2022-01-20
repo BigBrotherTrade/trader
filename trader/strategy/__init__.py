@@ -19,6 +19,7 @@ import ujson as json
 import pytz
 import time
 import datetime
+import logging
 from collections import defaultdict
 
 from croniter import croniter
@@ -26,17 +27,17 @@ import asyncio
 from abc import abstractmethod, ABCMeta
 import aioredis
 
-from trader.utils.my_logger import get_my_logger
 from trader.utils.func_container import ParamFunctionContainer
-from trader.utils.read_config import *
+from trader.utils.read_config import config
 
-logger = get_my_logger('BaseModule')
+logger = logging.getLogger('BaseModule')
 
 
 class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
-    def __init__(self, io_loop: asyncio.AbstractEventLoop = None):
+    def __init__(self):
         super().__init__()
-        self.io_loop = io_loop or asyncio.get_running_loop()
+        self.io_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.io_loop)
         self.redis_client = aioredis.from_url(
             f"redis://{config.get('REDIS', 'host', fallback='localhost')}:"
             f"{config.getint('REDIS', 'port', fallback=6379)}/{config.getint('REDIS', 'db', fallback=0)}",
@@ -86,15 +87,13 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
                 if cron_dict['handle'] is not None:
                     cron_dict['handle'].cancel()
                 cron_dict['handle'] = self.io_loop.call_at(self._get_next(key), self._call_next, key)
-            await self.start()
             self.initialized = True
-            logger.info('%s plugin installed', type(self).__name__)
+            logger.debug('%s plugin installed', type(self).__name__)
         except Exception as e:
             logger.error('%s plugin install failed: %s', type(self).__name__, repr(e), exc_info=True)
 
     async def uninstall(self):
         try:
-            await self.stop()
             await self.sub_client.punsubscribe()
             # await asyncio.wait(self.sub_tasks, loop=self.io_loop)
             self.sub_tasks.clear()
@@ -104,7 +103,7 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
                     self.crontab_router[key]['handle'].cancel()
                     self.crontab_router[key]['handle'] = None
             self.initialized = False
-            logger.info('%s plugin uninstalled', type(self).__name__)
+            logger.debug('%s plugin uninstalled', type(self).__name__)
         except Exception as e:
             logger.error('%s plugin uninstall failed: %s', type(self).__name__, repr(e), exc_info=True)
 
@@ -121,27 +120,20 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
                 break
         logger.debug('%s quit _msg_reader!', type(self).__name__)
 
-    @abstractmethod
     async def start(self):
-        pass
+        await self.install()
 
-    @abstractmethod
     async def stop(self):
-        pass
+        await self.uninstall()
 
-    @classmethod
-    def run(cls):
-        print('strategy run(): do nothing')
-        # loop = asyncio.new_event_loop()
-        # asyncio.set_event_loop(loop)
-        # plugin = cls(loop)
-        # try:
-        #     loop.create_task(plugin.install())
-        #     loop.run_forever()
-        # except KeyboardInterrupt:
-        #     pass
-        # except Exception as e:
-        #     logger.error('run failed: %s', repr(e), exc_info=True)
-        # finally:
-        #     loop.run_until_complete(plugin.uninstall())
-        # loop.close()
+    def run(self):
+        try:
+            self.io_loop.create_task(self.start())
+            self.io_loop.run_forever()
+        except KeyboardInterrupt:
+            self.io_loop.run_until_complete(self.stop())
+        except Exception as ee:
+            logger.error('发生错误: %s', repr(ee), exc_info=True)
+            self.io_loop.run_until_complete(self.stop())
+        finally:
+            logger.debug('程序已退出')

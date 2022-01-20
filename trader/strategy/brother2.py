@@ -20,7 +20,7 @@ from collections import defaultdict
 import datetime
 import pytz
 from decimal import Decimal
-
+import logging
 from django.db.models import Q, F, Max, Min, Sum
 from django.db import connection
 from talib import ATR
@@ -29,19 +29,18 @@ import aioredis
 
 from trader.strategy import BaseModule
 from trader.utils.func_container import param_function
-from trader.utils.read_config import *
-from trader.utils.my_logger import get_my_logger
+from trader.utils.read_config import config
 from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, \
     update_from_czce, update_from_cffex, get_contracts_argument, calc_main_inst, str_to_number
 from panel.models import *
 
-logger = get_my_logger('CTPApi')
+logger = logging.getLogger('CTPApi')
 HANDLER_TIME_OUT = config.getint('TRADE', 'command_timeout', fallback=10)
 
 
 class TradeStrategy(BaseModule):
-    def __init__(self, name: str, io_loop: asyncio.AbstractEventLoop = None):
-        super().__init__(io_loop)
+    def __init__(self, name: str):
+        super().__init__()
         self.__market_response_format = config.get('MSG_CHANNEL', 'market_response_format')
         self.__trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
         self.__request_format = config.get('MSG_CHANNEL', 'request_format')
@@ -110,10 +109,11 @@ class TradeStrategy(BaseModule):
                         cost=pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money * inst.volume_multiple + pos[
                             'Volume'] * inst.fee_volume, profit=profit, frozen_margin=Decimal(pos['Margin']))
             except Exception as ee:
-                logger.info('update_position 发生错误: %s', repr(ee), exc_info=True)
+                logger.warning('update_position 发生错误: %s', repr(ee), exc_info=True)
                 continue
 
     async def start(self):
+        await self.install()
         self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=61)
         await self.query('TradingAccount')
         order_list = await self.query('Order')
@@ -130,9 +130,6 @@ class TradeStrategy(BaseModule):
                 self.save_order(order)
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
-
-    async def stop(self):
-        pass
 
     def next_order_ref(self):
         self.__order_ref = 1 if self.__order_ref == 999 else self.__order_ref + 1
@@ -190,7 +187,7 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             return task.result()
         except Exception as e:
-            logger.error('%s failed: %s', query_type, repr(e), exc_info=True)
+            logger.warning('%s failed: %s', query_type, repr(e), exc_info=True)
             if sub_client and channel_rsp_qry:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -211,7 +208,7 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             return task.result()
         except Exception as e:
-            logger.error('SubscribeMarketData failed: %s', repr(e), exc_info=True)
+            logger.warning('SubscribeMarketData failed: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_dat:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -232,7 +229,7 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             return task.result()
         except Exception as e:
-            logger.error('UnSubscribeMarketData failed: %s', repr(e), exc_info=True)
+            logger.warning('UnSubscribeMarketData failed: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_dat:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -318,10 +315,10 @@ class TradeStrategy(BaseModule):
             await asyncio.wait_for(task, HANDLER_TIME_OUT)
             await sub_client.punsubscribe()
             await sub_client.close()
-            logger.info('ReqOrderInsert, rst: %s', task.result()[0]['StatusMsg'])
+            logger.debug('ReqOrderInsert, rst: %s', task.result()[0]['StatusMsg'])
             return task.result()
         except Exception as e:
-            logger.error('ReqOrderInsert failed: %s', repr(e), exc_info=True)
+            logger.warning('ReqOrderInsert failed: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rtn_odr:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -345,11 +342,11 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             result = task.result()[0]
             if 'ErrorID' in result:
-                logger.error(f"撤销订单出错: ErrorID={result['ErrorID']}")
+                logger.warning(f"撤销订单出错: ErrorID={result['ErrorID']}")
                 return False
             return True
         except Exception as e:
-            logger.error('cancel_order failed: %s', repr(e), exc_info=True)
+            logger.warning('cancel_order failed: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_odr_act:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -386,9 +383,9 @@ class TradeStrategy(BaseModule):
         try:
             inst = channel.split(':')[-1]
             tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
-            logger.info('inst=%s, tick: %s', inst, tick)
+            logger.debug('inst=%s, tick: %s', inst, tick)
         except Exception as ee:
-            logger.error('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
+            logger.warning('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
 
     @staticmethod
     def get_trade_string(trade: dict) -> str:
@@ -502,7 +499,7 @@ class TradeStrategy(BaseModule):
                 signal.processed = True
                 signal.save(update_fields=['processed'])
         except Exception as ee:
-            logger.error('OnRtnTrade failed: %s', repr(ee), exc_info=True)
+            logger.warning('OnRtnTrade failed: %s', repr(ee), exc_info=True)
 
     def save_order(self, order: dict):
         product_code = self.__re_extract_code.match(order['InstrumentID']).group(1)
@@ -538,7 +535,7 @@ class TradeStrategy(BaseModule):
     async def OnRtnOrder(self, _: str, order: dict):
         try:
             if order["OrderSysID"]:
-                logger.info(f"订单回报: {self.get_order_string(order)}")
+                logger.debug(f"订单回报: {self.get_order_string(order)}")
             order_obj, _ = self.save_order(order)
             inst = Instrument.objects.get(product_code=self.__re_extract_code.match(order['InstrumentID']).group(1))
             # 处理由于委托价格超出交易所涨跌停板而被撤单的报单，将委托价格下调50%，重新报单
@@ -552,7 +549,7 @@ class TradeStrategy(BaseModule):
                     if order['Direction'] == DirectionType.LONG:
                         price = (price - last_bar.settlement) * Decimal(0.5)
                         if price / last_bar.settlement < 0.01:
-                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            logger.warning(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
                             return
                         rice = price_round(last_bar.settlement + price, inst.price_tick)
                         logger.info(f"{inst} 以价格 {price} 开多{volume}手 重新报单...")
@@ -560,7 +557,7 @@ class TradeStrategy(BaseModule):
                     else:
                         price = (last_bar.settlement - price) * Decimal(0.5)
                         if price / last_bar.settlement < 0.01:
-                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            logger.warning(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
                             return
                         rice = price_round(last_bar.settlement - price, inst.price_tick)
                         logger.info(f"{inst} 以价格 {price} 开空{volume}手 重新报单...")
@@ -572,7 +569,7 @@ class TradeStrategy(BaseModule):
                     if order['Direction'] == DirectionType.LONG:
                         price = (price - last_bar.settlement) * Decimal(0.5)
                         if price / last_bar.settlement < 0.01:
-                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            logger.warning(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
                             return
                         price = price_round(last_bar.settlement + price, inst.price_tick)
                         logger.info(f"{inst} 以价格 {price} 买平{volume}手 重新报单...")
@@ -580,13 +577,13 @@ class TradeStrategy(BaseModule):
                     else:
                         price = (last_bar.settlement - price) * Decimal(0.5)
                         if price / last_bar.settlement < 0.01:
-                            logger.info(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
+                            logger.warning(f"{inst} 新计算价差: {price} 过低难以成交，放弃报单!")
                             return
                         price = price_round(last_bar.settlement - price, inst.price_tick)
                         logger.info(f"{inst} 以价格 {price} 卖平{volume}手 重新报单...")
                         self.io_loop.create_task(self.sell(pos, price, volume))
         except Exception as ee:
-            logger.error('OnRtnOrder failed: %s', repr(ee), exc_info=True)
+            logger.warning('OnRtnOrder failed: %s', repr(ee), exc_info=True)
 
     @param_function(channel='MSG:CTP:RSP:TRADE:OnRspQryInvestorPositionDetail:*')
     async def OnRspQryInvestorPositionDetail(self, _, pos: dict):
@@ -609,24 +606,6 @@ class TradeStrategy(BaseModule):
     async def OnRspQryTradingAccount(self, _, account: dict):
         self.update_account(account)
 
-    #     @param_function(channel='MSG:CTP:RSP:TRADE:OnRtnInstrumentStatus:*')
-    #     async def OnRtnInstrumentStatus(self, channel, status: dict):
-    #         """
-    # {"EnterReason":"1","EnterTime":"10:30:00","ExchangeID":"SHFE","ExchangeInstID":"ru","InstrumentID":"ru",
-    #  "InstrumentStatus":"2","SettlementGroupID":"00000001","TradingSegmentSN":27}
-    #         """
-    #         try:
-    #             product_code = channel.split(':')[-1]
-    #             inst = self.__strategy.instruments.filter(product_code=product_code).first()
-    #             if inst is None or product_code not in self.__inst_ids:
-    #                 return
-    #             # logger.info('合约状态通知: %s %s', inst, status)
-    #             if is_auction_time(inst, status):
-    #                 logger.info('%s 开始集合竞价, 查询待处理信号..', inst)
-    #                 self.process_signal(inst)
-    #         except Exception as ee:
-    #             logger.error('OnRtnInstrumentStatus failed: %s', repr(ee), exc_info=True)
-
     @param_function(crontab='*/1 * * * *')
     async def heartbeat(self):
         self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=301)
@@ -637,7 +616,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询日盘信号..')
+            logger.debug('查询日盘信号..')
             for sig in Signal.objects.filter(
                     ~Q(instrument__exchange=ExchangeType.CFFEX), trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
@@ -650,7 +629,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询遗漏的日盘信号..')
+            logger.debug('查询遗漏的日盘信号..')
             for sig in Signal.objects.filter(
                     ~Q(instrument__exchange=ExchangeType.CFFEX), trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
@@ -663,7 +642,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询股指和国债信号..')
+            logger.debug('查询股指和国债信号..')
             for sig in Signal.objects.filter(
                     instrument__exchange=ExchangeType.CFFEX, trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
@@ -676,7 +655,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询遗漏的股指和国债信号..')
+            logger.debug('查询遗漏的股指和国债信号..')
             for sig in Signal.objects.filter(
                     instrument__exchange=ExchangeType.CFFEX, trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
@@ -689,7 +668,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询夜盘信号..')
+            logger.debug('查询夜盘信号..')
             for sig in Signal.objects.filter(
                     trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
@@ -702,7 +681,7 @@ class TradeStrategy(BaseModule):
         day = day.replace(tzinfo=pytz.FixedOffset(480))
         _, trading = await is_trading_day(day)
         if trading:
-            logger.info('查询遗漏的夜盘信号..')
+            logger.debug('查询遗漏的夜盘信号..')
             for sig in Signal.objects.filter(
                     trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
@@ -716,12 +695,12 @@ class TradeStrategy(BaseModule):
         if not trading:
             logger.info('今日是非交易日, 不更新任何数据。')
             return
-        logger.info('更新账户')
+        logger.debug('更新账户')
         await self.query('TradingAccount')
-        logger.info('更新持仓')
+        logger.debug('更新持仓')
         self.__shares.clear()
         await self.query('InvestorPositionDetail')
-        logger.info('更新合约数据..')
+        logger.debug('更新合约数据..')
         inst_dict = defaultdict(dict)
         inst_list = await self.query('Instrument')
         for inst in inst_list:
@@ -761,7 +740,7 @@ class TradeStrategy(BaseModule):
                 inst.all_inst = all_inst
                 inst.save(update_fields=['margin_rate', 'all_inst'])
                 await self.update_inst_fee(inst)
-        logger.info('更新合约列表完成!')
+        logger.debug('更新合约列表完成!')
 
     @param_function(crontab='0 17 * * *')
     async def collect_quote(self):
@@ -779,7 +758,7 @@ class TradeStrategy(BaseModule):
             if not trading:
                 logger.info('今日是非交易日, 不计算任何数据。')
                 return
-            logger.info('每日盘后计算, day: %s, 获取交易所日线数据..', day)
+            logger.debug('每日盘后计算, day: %s, 获取交易所日线数据..', day)
             tasks = [
                 self.io_loop.create_task(update_from_shfe(day)),
                 self.io_loop.create_task(update_from_dce(day)),
@@ -787,21 +766,22 @@ class TradeStrategy(BaseModule):
                 self.io_loop.create_task(update_from_cffex(day)),
             ]
             await asyncio.wait(tasks)
-            logger.info('获取合约涨跌停幅度...')
+            logger.debug('获取合约涨跌停幅度...')
             await get_contracts_argument(day)
             for inst_obj in Instrument.objects.all():
-                logger.info('计算连续合约, 交易信号: %s', inst_obj.name)
+                logger.debug('计算连续合约, 交易信号: %s', inst_obj.name)
                 calc_main_inst(inst_obj, day)
                 self.calc_signal(inst_obj, day)
         except Exception as e:
-            logger.error('collect_quote failed: %s', e, exc_info=True)
-        logger.info('盘后计算完毕!')
+            logger.warning('collect_quote failed: %s', e, exc_info=True)
+        logger.debug('盘后计算完毕!')
 
     @param_function(crontab='30 15 * * *')
     async def update_equity(self):
         today, trading = await is_trading_day(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480)))
         if trading:
-            logger.info('更新资金净值 %s %s', today, trading)
+            logger.info("更新资金净值，可用资金: {:,.0f} 静态权益: {:,.0f} 动态权益: {:,.0f} 虚拟: {:,.0f}".format(
+                self.__cash, self.__pre_balance, self.__current, self.__fake))
             dividend = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).aggregate(Sum('dividend'))['dividend__sum']
             if dividend is None:
@@ -828,9 +808,9 @@ class TradeStrategy(BaseModule):
             inst.fee_money = Decimal(fee['CloseRatioByMoney'])
             inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
             inst.save(update_fields=['fee_money', 'fee_volume'])
-            logger.info(f"{inst} 已更新手续费")
+            logger.debug(f"{inst} 已更新手续费")
         except Exception as e:
-            logger.error('update_inst_fee failed: %s', e, exc_info=True)
+            logger.warning('update_inst_fee failed: %s', e, exc_info=True)
 
     def calc_signal(self, inst: Instrument, day: datetime.datetime):
         try:
@@ -969,9 +949,9 @@ class TradeStrategy(BaseModule):
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
                         'price': price, 'volume': volume, 'trigger_value': signal_value,
                         'priority': PriorityType.Normal, 'processed': False})
-                logger.debug(f"新信号：{sig}")
+                logger.info(f"新信号：{sig}")
         except Exception as e:
-            logger.error('calc_signal failed: %s', e, exc_info=True)
+            logger.warning('calc_signal failed: %s', e, exc_info=True)
 
     def process_signal(self, signal: Signal):
         """
@@ -1033,7 +1013,7 @@ class TradeStrategy(BaseModule):
                 else:
                     await self.buy_cover(trade, self.calc_down_limit(trade.instrument, bar), shares)
         except Exception as e:
-            logger.error('force_close_all failed: %s', e, exc_info=True)
+            logger.warning('force_close_all failed: %s', e, exc_info=True)
             return False
         return True
 

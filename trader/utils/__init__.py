@@ -13,6 +13,8 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
+import logging
+
 import ujson as json
 from decimal import Decimal
 import datetime
@@ -26,7 +28,7 @@ from itertools import combinations
 
 import pytz
 import aiohttp
-from django.db.models import F, Q, Max, Min
+from django.db.models import F, Max, Min
 import demjson
 import redis
 import quandl
@@ -37,9 +39,8 @@ from tqdm import tqdm
 from panel.models import *
 from trader.utils import ApiStruct
 from trader.utils.read_config import config
-from trader.utils.my_logger import get_my_logger
 
-logger = get_my_logger('trade.utils')
+logger = logging.getLogger('utils')
 
 max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
