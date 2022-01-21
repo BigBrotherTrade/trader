@@ -21,19 +21,19 @@ import time
 import datetime
 import logging
 from collections import defaultdict
-
+from django.utils import timezone
 from croniter import croniter
 import asyncio
 from abc import abstractmethod, ABCMeta
 import aioredis
 
-from trader.utils.func_container import ParamFunctionContainer
+from trader.utils.func_container import CallbackFunctionContainer
 from trader.utils.read_config import config
 
 logger = logging.getLogger('BaseModule')
 
 
-class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
+class BaseModule(CallbackFunctionContainer, metaclass=ABCMeta):
     def __init__(self):
         super().__init__()
         self.io_loop = asyncio.new_event_loop()
@@ -55,11 +55,11 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
         self.time = None
         self.loop_time = None
 
-    def _register_param(self):
-        self.datetime = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+    def _register_callback(self):
+        self.datetime = timezone.localtime()
         self.time = time.time()
         self.loop_time = self.io_loop.time()
-        for fun_name, args in self.module_arg_dict.items():
+        for fun_name, args in self.callback_fun_args.items():
             if 'crontab' in args:
                 key = args['crontab']
                 self.crontab_router[key]['func'] = getattr(self, fun_name)
@@ -79,7 +79,7 @@ class BaseModule(ParamFunctionContainer, metaclass=ABCMeta):
 
     async def install(self):
         try:
-            self._register_param()
+            self._register_callback()
             await self.sub_client.psubscribe(*self.channel_router.keys())
             asyncio.run_coroutine_threadsafe(self._msg_reader(), self.io_loop)
             # self.io_loop.create_task(self._msg_reader())

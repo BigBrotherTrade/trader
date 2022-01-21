@@ -18,31 +18,31 @@ from abc import ABCMeta
 from functools import wraps
 
 
-def param_function(**out_kwargs):
-    def _rest_handler(func):
+def RegisterCallback(**out_kwargs):
+    def _callback_handler(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             return func(self, *args, *kwargs)
 
         for key, value in out_kwargs.items():
-            setattr(wrapper, 'arg_{}'.format(key), value)
-        setattr(wrapper, 'is_module_function', True)
+            setattr(wrapper, f'arg_{key}', value)
+        setattr(wrapper, 'is_callback_function', True)
         return wrapper
 
-    return _rest_handler
+    return _callback_handler
 
 
-class ParamFunctionContainer(object, metaclass=ABCMeta):
+class CallbackFunctionContainer(object, metaclass=ABCMeta):
     def __init__(self):
-        self.module_arg_dict = dict()
+        self.callback_fun_args = dict()
         self._collect_all()
 
     def _collect_all(self):
         for fun_name in dir(self):
             fun = getattr(self, fun_name)
-            if hasattr(fun, 'is_module_function'):
+            if hasattr(fun, 'is_callback_function'):
                 params = dict()
                 for arg in dir(fun):
                     if arg.startswith('arg_'):
                         params[arg[4:]] = getattr(fun, arg)
-                self.module_arg_dict[fun_name] = params
+                self.callback_fun_args[fun_name] = params

@@ -13,11 +13,11 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-
-from appdirs import AppDirs
+import sys
 import os
 import xml.etree.ElementTree as ET
 import configparser
+from appdirs import AppDirs
 from trader import version as app_ver
 
 config_example = """# trader configuration file
@@ -72,5 +72,7 @@ config = configparser.ConfigParser(interpolation=None)
 config.read(config_file)
 
 ctp_errors = {}
-for error in ET.parse('error.xml').getroot():
+ctp_xml_path = 'D:/github/trader/trader/utils/error.xml' if sys.platform == 'win32' \
+    else '/root/gitee/trader/trader/utils/error.xml'
+for error in ET.parse(ctp_xml_path).getroot():
     ctp_errors[int(error.attrib['value'])] = error.attrib['prompt']

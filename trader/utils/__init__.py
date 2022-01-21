@@ -29,6 +29,7 @@ from itertools import combinations
 import pytz
 import aiohttp
 from django.db.models import F, Max, Min
+from django.utils import timezone
 import demjson
 import redis
 import quandl
@@ -462,15 +463,13 @@ def create_main(inst: Instrument):
                 # time__gte=datetime.datetime.strptime('20211211', '%Y%m%d'),
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
                 'time').values_list('time', flat=True).distinct():
-            print(day, calc_main_inst(inst, datetime.datetime.combine(
-                day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
+            print(day, calc_main_inst(inst, timezone.make_aware(datetime.datetime.combine(day, datetime.time.min))))
     else:
         for day in DailyBar.objects.filter(
                 # time__gte=datetime.datetime.strptime('20211211', '%Y%m%d'),
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
                 'time').values_list('time', flat=True).distinct():
-            print(day, calc_main_inst(inst, datetime.datetime.combine(
-                day, datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))))
+            print(day, calc_main_inst(inst, timezone.make_aware(datetime.datetime.combine(day, datetime.time.min))))
 
 
 def create_main_all():
@@ -481,7 +480,7 @@ def create_main_all():
 
 def is_auction_time(inst: Instrument, status: dict):
     if status['InstrumentStatus'] == ApiStruct.IS_AuctionOrdering:
-        now = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+        now = timezone.localtime()
         if inst.exchange == ExchangeType.CFFEX:
             return True
         # 夜盘集合竞价时间是 20:55
@@ -588,7 +587,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
         time__lte=day.date(),
         exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
         'time', 'open', 'high', 'low', 'close', 'settlement'))
-    df.index = pd.DatetimeIndex(df.time)
+    df.index = pd.DatetimeIndex(df.time, tz=pytz.FixedOffset(480))
     df['atr'] = ATR(df.open, df.high, df.low, timeperiod=atr_n)
     # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend
     df['short_trend'] = df.close
@@ -602,8 +601,8 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
     last_trade = None
     for cur_idx in range(break_n+1, df.shape[0]):
         idx = cur_idx - 1
-        cur_date = df.index[cur_idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
-        prev_date = df.index[idx].to_pydatetime().replace(tzinfo=pytz.FixedOffset(480))
+        cur_date = df.index[cur_idx].to_pydatetime()
+        prev_date = df.index[idx].to_pydatetime()
         if cur_pos == 0:
             if df.short_trend[idx] > df.long_trend[idx] and int(df.close[idx]) >= int(df.high_line[idx-1]):
                 new_bar = MainBar.objects.filter(
@@ -691,8 +690,7 @@ def calc_his_all(day: datetime.datetime):
         if last_day is None:
             last_day = datetime.datetime.combine(
                 MainBar.objects.filter(product_code=inst.product_code, time__lte=day).order_by(
-                    '-time').values_list('time', flat=True).first(),
-                datetime.time.min.replace(tzinfo=pytz.FixedOffset(480)))
+                    '-time').values_list('time', flat=True).first(), timezone.make_aware(datetime.time.min))
         calc_history_signal(inst, last_day, strategy)
 
 
@@ -711,8 +709,8 @@ def calc_his_down_limit(inst: Instrument, bar: DailyBar):
 
 
 async def clean_daily_bar():
-    day = datetime.datetime.strptime('20100416', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
-    end = datetime.datetime.strptime('20160118', '%Y%m%d').replace(tzinfo=pytz.FixedOffset(480))
+    day = timezone.make_aware(datetime.datetime.strptime('20100416', '%Y%m%d'))
+    end = timezone.make_aware(datetime.datetime.strptime('20160118', '%Y%m%d'))
     tasks = []
     while day <= end:
         tasks.append(is_trading_day(day))
@@ -763,7 +761,7 @@ def load_kt_data(directory: str = '/Users/jeffchen/kt_data/'):
 async def get_contracts_argument(day: datetime.datetime = None) -> bool:
     try:
         if day is None:
-            day = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+            day = timezone.localtime()
         day_str = day.strftime('%Y%m%d')
         redis_client = redis.StrictRedis(
             host=config.get('REDIS', 'host', fallback='localhost'),
