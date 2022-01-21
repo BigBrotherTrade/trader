@@ -454,14 +454,15 @@ class TradeStrategy(BaseModule):
                     signal = signal.filter(
                         code=trade['InstrumentID'], trigger_time__gte=self.__last_trading_day, volume=trade['Volume'],
                         strategy=self.__strategy, instrument=inst, processed=False).first()
-            else:  # 平仓
+            else:  # 平仓 TODO: 部分成交的情况下，最后一笔成交完成时程序不会修改trade表对应的仓位
                 open_direct = DirectionType.values[DirectionType.LONG] if \
                     trade['Direction'] == DirectionType.SHORT else DirectionType.values[DirectionType.SHORT]
                 last_trade = Trade.objects.filter(
                     Q(closed_shares__isnull=True) | Q(closed_shares__lt=F('shares')), shares=F('filled_shares'),
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
                     open_time__lte=self.__trading_day, direction=open_direct).first()
-                # print(connection.queries[-1]['sql'])
+                print(connection.queries[-1]['sql'])
+                print(f'trade={last_trade}')
                 if last_trade:
                     if last_trade.closed_shares and last_trade.avg_exit_price:
                         last_trade.avg_exit_price = (last_trade.avg_exit_price * last_trade.closed_shares + trade[
@@ -482,17 +483,17 @@ class TradeStrategy(BaseModule):
                         else:
                             profit_point = last_trade.avg_entry_price - last_trade.avg_exit_price
                         last_trade.profit = profit_point * last_trade.shares * inst.volume_multiple
-                    last_trade.save()
+                    last_trade.save(force_update=True)
                 else:
                     manual_trade = True
                 if trade_completed:
-                    if not manual_trade:
+                    if manual_trade:
+                        signal = Signal.objects.filter(
+                            type=SignalType.BUY_COVER if trade['Direction'] == DirectionType.LONG else SignalType.SELL)
+                    else:
                         signal = Signal.objects.filter(
                             Q(type=SignalType.BUY_COVER if trade['Direction'] == DirectionType.LONG else
                                 SignalType.SELL) | Q(type=SignalType.ROLL_CLOSE))
-                    else:
-                        signal = Signal.objects.filter(
-                            type=SignalType.BUY_COVER if trade['Direction'] == DirectionType.LONG else SignalType.SELL)
                     signal = signal.filter(
                         code=trade['InstrumentID'], trigger_time__gte=self.__last_trading_day, volume=trade['Volume'],
                         strategy=self.__strategy, instrument=inst, processed=False).first()
