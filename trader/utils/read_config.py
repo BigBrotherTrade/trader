@@ -27,6 +27,7 @@ trade_response_prefix = MSG:CTP:RSP:TRADE:
 trade_response_format = MSG:CTP:RSP:TRADE:{}:{}
 market_response_prefix = MSG:CTP:RSP:MARKET:
 market_response_format = MSG:CTP:RSP:MARKET:{}:{}
+weixin_log = MSG:LOG:WEIXIN
 
 [TRADE]
 command_timeout = 5
@@ -52,8 +53,9 @@ api_key = 123456
 token = 123456
 
 [LOG]
-level = INFO
+level = DEBUG
 format = %(asctime)s %(name)s [%(levelname)s] %(message)s
+weixin_format = [%(levelname)s] %(message)s
 """
 
 app_dir = AppDirs('trader')

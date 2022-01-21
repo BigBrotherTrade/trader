@@ -57,7 +57,7 @@ if __name__ == '__main__':
     console_handler.setLevel('DEBUG')
     redis_handler = RedislHandler(config.get('MSG_CHANNEL', 'weixin_log'))
     redis_handler.setFormatter(config.get('LOG', 'weixin_format'))
-    redis_handler.setLevel('DEBUG')
+    redis_handler.setLevel('INFO')
     logger = logging.getLogger()
     logger.setLevel(config.get('LOG', 'level'))
     logger.addHandler(file_handler)
