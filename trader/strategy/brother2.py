@@ -695,16 +695,8 @@ class TradeStrategy(BaseModule):
                 await self.update_inst_fee(inst)
         logger.debug('更新合约列表完成!')
 
-    @RegisterCallback(crontab='15 17 * * *')
-    async def collect_quote(self):
-        """
-        各品种的主联合约：计算基差，主联合约复权（新浪）
-        资金曲线（ctp）
-        各品种换月标志
-        各品种开仓价格
-        各品种平仓价格
-        微信报告
-        """
+    @RegisterCallback(crontab='0 17 * * *')
+    async def collect_quote(self, tasks=None):
         try:
             day = timezone.localtime()
             _, trading = await is_trading_day(day)
@@ -712,22 +704,27 @@ class TradeStrategy(BaseModule):
                 logger.info('今日是非交易日, 不计算任何数据。')
                 return
             logger.debug(f'{day}盘后计算,获取交易所日线数据..')
-            tasks = [
-                self.io_loop.create_task(update_from_shfe(day)),
-                self.io_loop.create_task(update_from_dce(day)),
-                self.io_loop.create_task(update_from_czce(day)),
-                self.io_loop.create_task(update_from_cffex(day)),
-            ]
-            await asyncio.wait(tasks)
-            logger.debug('获取合约涨跌停幅度...')
-            await get_contracts_argument(day)
-            for inst_obj in Instrument.objects.all():
-                logger.debug(f'计算连续合约, 交易信号: {inst_obj.name}')
-                calc_main_inst(inst_obj, day)
-                self.calc_signal(inst_obj, day)
+            if tasks is None:
+                tasks = [update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument]
+            result = await asyncio.gather(*[func(day) for func in tasks], return_exceptions=True)
+            if all(result):
+                self.io_loop.call_soon(self.calculate, day)
+            else:
+                failed_tasks = [tasks[i] for i, rst in enumerate(result) if not rst]
+                self.io_loop.call_later(10, asyncio.create_task, self.collect_quote(failed_tasks))
         except Exception as e:
             logger.warning(f'collect_quote failed: {repr(e)}', exc_info=True)
         logger.debug('盘后计算完毕!')
+
+    def calculate(self, day):
+        try:
+            for inst_obj in Instrument.objects.all():
+                logger.debug(f'计算连续合约, 交易信号: {inst_obj.name}')
+                calc_main_inst(inst_obj, day)
+                if inst_obj.product_code in self.__inst_ids:
+                    self.calc_signal(inst_obj, day)
+        except Exception as e:
+            logger.warning(f'calculate failed: {repr(e)}', exc_info=True)
 
     @RegisterCallback(crontab='30 15 * * *')
     async def update_equity(self):

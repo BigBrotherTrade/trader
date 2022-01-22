@@ -162,7 +162,7 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
                     Instrument.objects.filter(product_code=code).update(name=name)
         return True
     except Exception as e:
-        logger.error('update_from_shfe failed: %s', e, exc_info=True)
+        logger.warning(f'update_from_shfe failed: {repr(e)}', exc_info=True)
         return False
 
 
@@ -205,7 +205,7 @@ async def update_from_czce(day: datetime.datetime) -> bool:
                             'open_interest': inst_data[10].replace(',', '')})
                 return True
     except Exception as e:
-        logger.error('update_from_czce failed: %s', e, exc_info=True)
+        logger.warning(f'update_from_czce failed: {repr(e)}', exc_info=True)
         return False
 
 
@@ -251,12 +251,16 @@ async def update_from_dce(day: datetime.datetime) -> bool:
                             'open_interest': inst_data[11].replace(',', '')})
                 return True
     except Exception as e:
-        logger.error('update_from_dce failed: %s', e, exc_info=True)
+        logger.warning(f'update_from_dce failed: {repr(e)}', exc_info=True)
         return False
 
-
+xxx = 0
 async def update_from_cffex(day: datetime.datetime) -> bool:
     try:
+        global xxx
+        xxx += 1
+        if xxx <= 1:
+            return False
         async with aiohttp.ClientSession() as session:
             await max_conn_cffex.acquire()
             async with session.get(f"http://{cffex_ip}/fzjy/mrhq/{day.strftime('%Y%m/%d')}/index.xml") as response:
@@ -307,7 +311,7 @@ async def update_from_cffex(day: datetime.datetime) -> bool:
                             'open_interest': inst_data.findtext('openinterest').replace(',', '')})
                 return True
     except Exception as e:
-        logger.error('update_from_cffex failed: %s', e, exc_info=True)
+        logger.warning(f'update_from_cffex failed: {repr(e)}', exc_info=True)
         return False
 
 
@@ -337,7 +341,7 @@ async def update_from_sina(day: datetime.datetime, inst: Instrument):
                             'volume': inst_data['volume'],
                             'open_interest': inst_data['position']})
     except Exception as e:
-        print('update_from_sina failed: %s' % e)
+        logger.warning(f'update_from_sina failed: {repr(e)}', exc_info=True)
 
 
 def store_main_bar(bar: DailyBar):
@@ -767,7 +771,6 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
             host=config.get('REDIS', 'host', fallback='localhost'),
             db=config.getint('REDIS', 'db', fallback=0), decode_responses=True)
         async with aiohttp.ClientSession() as session:
-
             # 上期所
             async with session.get(
                     f'http://{shfe_ip}/data/instrument/ContractDailyTradeArgument{day_str}.dat') as response:
@@ -867,5 +870,5 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
                     inst.save(update_fields=['up_limit_ratio', 'down_limit_ratio'])
         return True
     except Exception as e:
-        logger.error('get_contracts_argument failed: %s', e, exc_info=True)
+        logger.warning(f'get_contracts_argument failed: {repr(e)}', exc_info=True)
         return False

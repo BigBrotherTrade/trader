@@ -13,7 +13,6 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-import asynctest
 import sys
 import os
 import django
@@ -26,9 +25,12 @@ else:
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
-
-from trader.utils import *
-from trader.utils.read_config import *
+import redis
+import asyncio
+import asynctest
+from datetime import datetime
+from trader.utils import update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument
+from trader.utils.read_config import config
 
 
 class APITest(asynctest.TestCase):
@@ -36,22 +38,40 @@ class APITest(asynctest.TestCase):
         self.redis_client = redis.StrictRedis(
             host=config.get('REDIS', 'host', fallback='localhost'),
             db=config.getint('REDIS', 'db', fallback=1), decode_responses=True)
-        self.last_trading_day = datetime.datetime.strptime(self.redis_client.get("LastTradingDay"), '%Y%m%d')
+        self.trading_day = datetime.strptime(self.redis_client.get("LastTradingDay"), '%Y%m%d')
 
     def tearDown(self) -> None:
         self.redis_client.close()
 
-    # async def test_get_shfe_data(self):
-    #     self.assertTrue(await update_from_shfe(self.last_trading_day))
+    @asynctest.skipIf(True, 'no need')
+    async def test_get_shfe_data(self):
+        self.assertTrue(await update_from_shfe(self.trading_day))
 
-    # async def test_get_dce_data(self):
-    #     self.assertTrue(await update_from_dce(self.last_trading_day))
-    #
-    # async def test_get_czce_data(self):
-    #     self.assertTrue(await update_from_czce(self.last_trading_day))
-    #
-    # async def test_get_cffex_data(self):
-    #     self.assertTrue(await update_from_cffex(self.last_trading_day))
-    #
+    @asynctest.skipIf(True, 'no need')
+    async def test_get_dce_data(self):
+        self.assertTrue(await update_from_dce(self.trading_day))
+
+    @asynctest.skipIf(True, 'no need')
+    async def test_get_czce_data(self):
+        self.assertTrue(await update_from_czce(self.trading_day))
+
+    @asynctest.skipIf(True, 'no need')
+    async def test_get_cffex_data(self):
+        self.assertTrue(await update_from_cffex(self.trading_day))
+
+    @asynctest.skipIf(True, 'no need')
     async def test_get_contracts_argument(self):
-        self.assertTrue(await get_contracts_argument(self.last_trading_day))
+        self.assertTrue(await get_contracts_argument(self.trading_day))
+
+    @asynctest.skipIf(False, 'no need')
+    async def test_get_all(self):
+        print(f'tradingday: {self.trading_day}')
+        tasks = [
+            update_from_shfe(self.trading_day),
+            update_from_dce(self.trading_day),
+            update_from_czce(self.trading_day),
+            update_from_cffex(self.trading_day),
+            get_contracts_argument(self.trading_day)
+        ]
+        result = await asyncio.gather(*tasks, return_exceptions=True)
+        self.assertEqual(result, [True, True, True, True, True])
