@@ -72,7 +72,7 @@ class TradeStrategy(BaseModule):
         self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=61)
         now = int(timezone.localtime().strftime('%H%M'))
         if 840 <= now <= 1550 or 2010 <= now <= 2359:  # 非交易时间查不到数据
-            await self.query('TradingAccount')
+            await self.refresh_account()
             order_list = await self.query('Order')
             for order in order_list:
                 # 未成交订单
@@ -85,8 +85,124 @@ class TradeStrategy(BaseModule):
                 # 已成交订单
                 else:
                     self.save_order(order)
-            self.__shares.clear()
-            await self.query('InvestorPositionDetail')
+            await self.refresh_position()
+
+    async def refresh_account(self):
+        try:
+            account = await self.query('TradingAccount')
+            # 静态权益=上日结算-出金金额+入金金额
+            self.__pre_balance = Decimal(account['PreBalance']) - Decimal(
+                account['Withdraw']) + Decimal(account['Deposit'])
+            # 动态权益=静态权益+平仓盈亏+持仓盈亏-手续费
+            self.__current = self.__pre_balance + Decimal(account['CloseProfit']) + Decimal(
+                account['PositionProfit']) - Decimal(account['Commission'])
+            self.__margin = Decimal(account['CurrMargin'])
+            self.__cash = Decimal(account['Available'])
+            self.__cur_account = account
+            self.__broker.cash = self.__cash
+            self.__broker.current = self.__current
+            self.__broker.pre_balance = self.__pre_balance
+            self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
+            logger.debug(f"更新账户,可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
+                         f"动态权益: {self.__current:,.0f} 虚拟: {self.__fake:,.0f}")
+            self.__strategy = self.__broker.strategy_set.first()
+            self.__inst_ids = [inst.product_code for inst in self.__strategy.instruments.all()]
+        except Exception as e:
+            logger.warning(f'refresh_account 发生错误: {repr(e)}', exc_info=True)
+    
+    async def refresh_position(self):
+        try:
+            pos_list = await self.query('InvestorPositionDetail')
+            shares_dict = {}
+            for pos in pos_list:
+                if 'empty' in pos and pos['empty'] is True:
+                    continue
+                if pos['Volume'] > 0:
+                    old_pos = shares_dict.get(pos['InstrumentID'])
+                    if old_pos is None:
+                        shares_dict[pos['InstrumentID']] = pos
+                    else:
+                        old_pos['OpenPrice'] = (old_pos['OpenPrice'] * old_pos['Volume'] +
+                                                pos['OpenPrice'] * pos['Volume']) / (old_pos['Volume'] + pos['Volume'])
+                        old_pos['Volume'] += pos['Volume']
+                        old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
+                        old_pos['Margin'] += pos['Margin']
+            for _, pos in shares_dict.items():
+                p_code = self.__re_extract_code.match(pos['InstrumentID']).group(1)
+                inst = Instrument.objects.get(product_code=p_code)
+                profit = pos['PositionProfitByTrade']
+                trade = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy, instrument=inst, code=pos['InstrumentID'],
+                    direction=DirectionType.values[pos['Direction']], close_time__isnull=True).first()
+                if trade:
+                    trade.shares = (trade.closed_shares if trade.closed_shares else 0) + pos['Volume']
+                    trade.filled_shares = trade.shares
+                    trade.save(update_fields=['shares', 'filled_shares', 'profit'])
+                else:
+                    Trade.objects.create(
+                        broker=self.__broker, strategy=self.__strategy, instrument=inst, code=pos['InstrumentID'],
+                        direction=DirectionType.values[pos['Direction']],
+                        open_time=timezone.make_aware(datetime.datetime.strptime(pos['OpenDate'] + '08', '%Y%m%d%H')),
+                        shares=pos['Volume'], filled_shares=pos['Volume'], avg_entry_price=Decimal(pos['OpenPrice']),
+                        cost=pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money * inst.volume_multiple + pos[
+                            'Volume'] * inst.fee_volume, profit=profit, frozen_margin=Decimal(pos['Margin']))
+        except Exception as e:
+            logger.warning(f'refresh_position 发生错误: {repr(e)}', exc_info=True)
+    
+    async def refresh_instrument(self):
+        try:
+            inst_dict = defaultdict(dict)
+            inst_list = await self.query('Instrument')
+            for inst in inst_list:
+                if inst['empty']:
+                    continue
+                if inst['IsTrading'] == 1 and chr(inst['ProductClass']) == ApiStruct.PC_Futures and \
+                        int(str_to_number(inst['StrikePrice'])) == 0:
+                    if inst['ProductID'] in self.__ignore_inst_list or inst['LongMarginRatio'] > 1:
+                        continue
+                    inst_dict[inst['ProductID']][inst['InstrumentID']] = dict()
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['name'] = inst['InstrumentName']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['exchange'] = inst['ExchangeID']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['multiple'] = inst['VolumeMultiple']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['price_tick'] = inst['PriceTick']
+                    inst_dict[inst['ProductID']][inst['InstrumentID']]['margin'] = inst['LongMarginRatio']
+            for code in inst_dict.keys():
+                all_inst = ','.join(sorted(inst_dict[code].keys()))
+                inst_data = list(inst_dict[code].values())[0]
+                valid_name = self.__re_extract_name.match(inst_data['name'])
+                if valid_name is not None:
+                    valid_name = valid_name.group(1)
+                else:
+                    valid_name = inst_data['name']
+                if valid_name == code:
+                    valid_name = ''
+                inst_data['name'] = valid_name
+                inst, created = Instrument.objects.update_or_create(product_code=code, exchange=inst_data['exchange'])
+                print(f"inst:{inst} created:{created} main_code:{inst.main_code}")
+                if created:
+                    inst.name = inst_data['name']
+                    inst.volume_multiple = inst_data['multiple']
+                    inst.price_tick = inst_data['price_tick']
+                    inst.margin_rate = inst_data['margin']
+                    inst.save(update_fields=['name', 'volume_multiple', 'price_tick', 'margin_rate'])
+                elif inst.main_code:
+                    inst.margin_rate = inst_dict[code][inst.main_code]['margin']
+                    inst.all_inst = all_inst
+                    inst.save(update_fields=['margin_rate', 'all_inst'])
+        except Exception as e:
+            logger.warning(f'refresh_instrument 发生错误: {repr(e)}', exc_info=True)
+
+    async def refresh_fee(self):
+        try:
+            for inst in Instrument.objects.filter(main_code__isnull=False):
+                fee = await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code)
+                fee = fee[0]
+                inst.fee_money = Decimal(fee['CloseRatioByMoney'])
+                inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
+                inst.save(update_fields=['fee_money', 'fee_volume'])
+                logger.debug(f"{inst} 已更新手续费")
+        except Exception as e:
+            logger.warning(f'refresh_fee 发生错误: {repr(e)}', exc_info=True)
 
     def next_order_ref(self):
         self.__order_ref = 1 if self.__order_ref == 999 else self.__order_ref + 1
@@ -144,7 +260,7 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             return task.result()
         except Exception as e:
-            logger.warning(f'{query_type} failed: {repr(e)}', exc_info=True)
+            logger.warning(f'{query_type} 发生错误: {repr(e)}', exc_info=True)
             if sub_client and channel_rsp_qry:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -165,7 +281,7 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             return task.result()
         except Exception as e:
-            logger.warning(f'SubscribeMarketData failed: {repr(e)}', exc_info=True)
+            logger.warning(f'SubscribeMarketData 发生错误: {repr(e)}', exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_dat:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -186,7 +302,7 @@ class TradeStrategy(BaseModule):
             await sub_client.close()
             return task.result()
         except Exception as e:
-            logger.warning(f'UnSubscribeMarketData failed: {repr(e)}', exc_info=True)
+            logger.warning(f'UnSubscribeMarketData 发生错误: {repr(e)}', exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_dat:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -277,7 +393,7 @@ class TradeStrategy(BaseModule):
             logger.debug(f"ReqOrderInsert, rst: {result['StatusMsg']}")
             return result
         except Exception as e:
-            logger.warning(f'ReqOrderInsert failed: {repr(e)}', exc_info=True)
+            logger.warning(f'ReqOrderInsert 发生错误: {repr(e)}', exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rtn_odr:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -305,7 +421,7 @@ class TradeStrategy(BaseModule):
                 return False
             return True
         except Exception as e:
-            logger.warning('cancel_order failed: %s', repr(e), exc_info=True)
+            logger.warning('cancel_order 发生错误: %s', repr(e), exc_info=True)
             if sub_client and sub_client.in_pubsub and channel_rsp_odr_act:
                 await sub_client.unsubscribe()
                 await sub_client.close()
@@ -313,38 +429,12 @@ class TradeStrategy(BaseModule):
 
     @RegisterCallback(channel='MSG:CTP:RSP:MARKET:OnRtnDepthMarketData:*')
     async def OnRtnDepthMarketData(self, channel, tick: dict):
-        """
-        'PreOpenInterest': 50990,
-        'TradingDay': '20160803',
-        'SettlementPrice': 1.7976931348623157e+308,
-        'AskVolume1': 40,
-        'Volume': 11060,
-        'LastPrice': 37740,
-        'LowestPrice': 37720,
-        'ClosePrice': 1.7976931348623157e+308,
-        'ActionDay': '20160803',
-        'UpdateMillisec': 0,
-        'PreClosePrice': 37840,
-        'LowerLimitPrice': 35490,
-        'OpenInterest': 49460,
-        'UpperLimitPrice': 40020,
-        'AveragePrice': 189275.7233273056,
-        'HighestPrice': 38230,
-        'BidVolume1': 10,
-        'UpdateTime': '11:03:12',
-        'InstrumentID': 'cu1608',
-        'PreSettlementPrice': 37760,
-        'OpenPrice': 37990,
-        'BidPrice1': 37740,
-        'Turnover': 2093389500,
-        'AskPrice1': 37750
-        """
         try:
             inst = channel.split(':')[-1]
             tick['UpdateTime'] = datetime.datetime.strptime(tick['UpdateTime'], "%Y%m%d %H:%M:%S:%f")
             logger.debug('inst=%s, tick: %s', inst, tick)
         except Exception as ee:
-            logger.warning('OnRtnDepthMarketData failed: %s', repr(ee), exc_info=True)
+            logger.warning('OnRtnDepthMarketData 发生错误: %s', repr(ee), exc_info=True)
 
     @staticmethod
     def get_trade_string(trade: dict) -> str:
@@ -458,7 +548,7 @@ class TradeStrategy(BaseModule):
                 signal.processed = True
                 signal.save(update_fields=['processed'])
         except Exception as ee:
-            logger.warning(f'OnRtnTrade failed: {repr(ee)}', exc_info=True)
+            logger.warning(f'OnRtnTrade 发生错误: {repr(ee)}', exc_info=True)
 
     def save_order(self, order: dict):
         product_code = self.__re_extract_code.match(order['InstrumentID']).group(1)
@@ -542,28 +632,7 @@ class TradeStrategy(BaseModule):
                         logger.info(f"{inst} 以价格 {price} 卖平{volume}手 重新报单...")
                         self.io_loop.create_task(self.sell(pos, price, volume))
         except Exception as ee:
-            logger.warning(f'OnRtnOrder failed: {repr(ee)}', exc_info=True)
-
-    @RegisterCallback(channel='MSG:CTP:RSP:TRADE:OnRspQryInvestorPositionDetail:*')
-    async def OnRspQryInvestorPositionDetail(self, _, pos: dict):
-        if 'empty' in pos and pos['empty'] is True:
-            return
-        if pos['Volume'] > 0:
-            old_pos = self.__shares.get(pos['InstrumentID'])
-            if old_pos is None:
-                self.__shares[pos['InstrumentID']] = pos
-            else:
-                old_pos['OpenPrice'] = (old_pos['OpenPrice'] * old_pos['Volume'] +
-                                        pos['OpenPrice'] * pos['Volume']) / (old_pos['Volume'] + pos['Volume'])
-                old_pos['Volume'] += pos['Volume']
-                old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
-                old_pos['Margin'] += pos['Margin']
-        if pos['bIsLast']:
-            self.update_position()
-
-    @RegisterCallback(channel='MSG:CTP:RSP:TRADE:OnRspQryTradingAccount:*')
-    async def OnRspQryTradingAccount(self, _, account: dict):
-        self.update_account(account)
+            logger.warning(f'OnRtnOrder 发生错误: {repr(ee)}', exc_info=True)
 
     @RegisterCallback(crontab='*/1 * * * *')
     async def heartbeat(self):
@@ -642,89 +711,22 @@ class TradeStrategy(BaseModule):
                 self.process_signal(sig)
 
     @RegisterCallback(crontab='20 15 * * *')
-    async def refresh_instrument(self):
+    async def refresh_all(self):
         day = timezone.localtime()
         _, trading = await is_trading_day(day)
         if not trading:
             logger.info('今日是非交易日, 不更新任何数据。')
             return
         logger.debug('更新账户')
-        await self.query('TradingAccount')
-        logger.debug('更新持仓')
-        self.__shares.clear()
-        await self.query('InvestorPositionDetail')
+        await self.refresh_account()
         logger.debug('更新合约数据..')
-        inst_dict = defaultdict(dict)
-        inst_list = await self.query('Instrument')
-        for inst in inst_list:
-            if inst['empty']:
-                continue
-            if inst['IsTrading'] == 1 and chr(inst['ProductClass']) == ApiStruct.PC_Futures and \
-                    int(str_to_number(inst['StrikePrice'])) == 0:
-                if inst['ProductID'] in self.__ignore_inst_list or inst['LongMarginRatio'] > 1:
-                    continue
-                inst_dict[inst['ProductID']][inst['InstrumentID']] = dict()
-                inst_dict[inst['ProductID']][inst['InstrumentID']]['name'] = inst['InstrumentName']
-                inst_dict[inst['ProductID']][inst['InstrumentID']]['exchange'] = inst['ExchangeID']
-                inst_dict[inst['ProductID']][inst['InstrumentID']]['multiple'] = inst['VolumeMultiple']
-                inst_dict[inst['ProductID']][inst['InstrumentID']]['price_tick'] = inst['PriceTick']
-                inst_dict[inst['ProductID']][inst['InstrumentID']]['margin'] = inst['LongMarginRatio']
-        for code in inst_dict.keys():
-            all_inst = ','.join(sorted(inst_dict[code].keys()))
-            inst_data = list(inst_dict[code].values())[0]
-            valid_name = self.__re_extract_name.match(inst_data['name'])
-            if valid_name is not None:
-                valid_name = valid_name.group(1)
-            else:
-                valid_name = inst_data['name']
-            if valid_name == code:
-                valid_name = ''
-            inst_data['name'] = valid_name
-            inst, created = Instrument.objects.update_or_create(product_code=code, exchange=inst_data['exchange'])
-            print(f"inst:{inst} created:{created} main_code:{inst.main_code}")
-            if created:
-                inst.name = inst_data['name']
-                inst.volume_multiple = inst_data['multiple']
-                inst.price_tick = inst_data['price_tick']
-                inst.margin_rate = inst_data['margin']
-                inst.save(update_fields=['name', 'volume_multiple', 'price_tick', 'margin_rate'])
-            elif inst.main_code:
-                inst.margin_rate = inst_dict[code][inst.main_code]['margin']
-                inst.all_inst = all_inst
-                inst.save(update_fields=['margin_rate', 'all_inst'])
-                await self.update_inst_fee(inst)
-        logger.debug('更新合约列表完成!')
-
-    @RegisterCallback(crontab='0 17 * * *')
-    async def collect_quote(self, tasks=None):
-        try:
-            day = timezone.localtime()
-            _, trading = await is_trading_day(day)
-            if not trading:
-                logger.info('今日是非交易日, 不计算任何数据。')
-                return
-            logger.debug(f'{day}盘后计算,获取交易所日线数据..')
-            if tasks is None:
-                tasks = [update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument]
-            result = await asyncio.gather(*[func(day) for func in tasks], return_exceptions=True)
-            if all(result):
-                self.io_loop.call_soon(self.calculate, day)
-            else:
-                failed_tasks = [tasks[i] for i, rst in enumerate(result) if not rst]
-                self.io_loop.call_later(10, asyncio.create_task, self.collect_quote(failed_tasks))
-        except Exception as e:
-            logger.warning(f'collect_quote failed: {repr(e)}', exc_info=True)
-        logger.debug('盘后计算完毕!')
-
-    def calculate(self, day):
-        try:
-            for inst_obj in Instrument.objects.all():
-                logger.debug(f'计算连续合约, 交易信号: {inst_obj.name}')
-                calc_main_inst(inst_obj, day)
-                if inst_obj.product_code in self.__inst_ids:
-                    self.calc_signal(inst_obj, day)
-        except Exception as e:
-            logger.warning(f'calculate failed: {repr(e)}', exc_info=True)
+        await self.refresh_instrument()
+        await self.refresh_fee()
+        logger.debug('更新持仓')
+        await self.refresh_position()
+        logger.debug('更新手续费')
+        await self.refresh_fee()
+        logger.debug('全部更新完成!')
 
     @RegisterCallback(crontab='30 15 * * *')
     async def update_equity(self):
@@ -748,19 +750,36 @@ class TradeStrategy(BaseModule):
                 'used_margin': self.__margin,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
 
-    async def update_inst_fee(self, inst: Instrument):
-        """
-        更新每一个合约的手续费
-        """
+    @RegisterCallback(crontab='0 17 * * *')
+    async def collect_quote(self, tasks=None):
         try:
-            fee = await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code)
-            fee = fee[0]
-            inst.fee_money = Decimal(fee['CloseRatioByMoney'])
-            inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
-            inst.save(update_fields=['fee_money', 'fee_volume'])
-            logger.debug(f"{inst} 已更新手续费")
+            day = timezone.localtime()
+            _, trading = await is_trading_day(day)
+            if not trading:
+                logger.info('今日是非交易日, 不计算任何数据。')
+                return
+            logger.debug(f'{day}盘后计算,获取交易所日线数据..')
+            if tasks is None:
+                tasks = [update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument]
+            result = await asyncio.gather(*[func(day) for func in tasks], return_exceptions=True)
+            if all(result):
+                self.io_loop.call_soon(self.calculate, day)
+            else:
+                failed_tasks = [tasks[i] for i, rst in enumerate(result) if not rst]
+                self.io_loop.call_later(10, asyncio.create_task, self.collect_quote(failed_tasks))
         except Exception as e:
-            logger.warning('update_inst_fee failed: %s', e, exc_info=True)
+            logger.warning(f'collect_quote 发生错误: {repr(e)}', exc_info=True)
+        logger.debug('盘后计算完毕!')
+
+    def calculate(self, day):
+        try:
+            for inst_obj in Instrument.objects.all():
+                logger.debug(f'计算连续合约, 交易信号: {inst_obj.name}')
+                calc_main_inst(inst_obj, day)
+                if inst_obj.product_code in self.__inst_ids:
+                    self.calc_signal(inst_obj, day)
+        except Exception as e:
+            logger.warning(f'calculate 发生错误: {repr(e)}', exc_info=True)
 
     def calc_signal(self, inst: Instrument, day: datetime.datetime):
         try:
@@ -901,7 +920,7 @@ class TradeStrategy(BaseModule):
                         'priority': PriorityType.Normal, 'processed': False})
                 logger.info(f"新信号：{sig}")
         except Exception as e:
-            logger.warning(f'calc_signal failed: {repr(e)}', exc_info=True)
+            logger.warning(f'calc_signal 发生错误: {repr(e)}', exc_info=True)
 
     def process_signal(self, signal: Signal):
         """
@@ -963,53 +982,9 @@ class TradeStrategy(BaseModule):
                 else:
                     await self.buy_cover(trade, self.calc_down_limit(trade.instrument, bar), shares)
         except Exception as e:
-            logger.warning(f'force_close_all failed: {repr(e)}', exc_info=True)
+            logger.warning(f'force_close_all 发生错误: {repr(e)}', exc_info=True)
             return False
         return True
-
-    def update_account(self, account: dict):
-        # 静态权益=上日结算-出金金额+入金金额
-        self.__pre_balance = Decimal(account['PreBalance']) - Decimal(account['Withdraw']) + \
-                             Decimal(account['Deposit'])
-        # 动态权益=静态权益+平仓盈亏+持仓盈亏-手续费
-        self.__current = self.__pre_balance + Decimal(account['CloseProfit']) + Decimal(
-            account['PositionProfit']) - Decimal(account['Commission'])
-        self.__margin = Decimal(account['CurrMargin'])
-        self.__cash = Decimal(account['Available'])
-        self.__cur_account = account
-        self.__broker.cash = self.__cash
-        self.__broker.current = self.__current
-        self.__broker.pre_balance = self.__pre_balance
-        self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
-        logger.debug(f"更新账户,可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
-                     f"动态权益: {self.__current:,.0f} 虚拟: {self.__fake:,.0f}")
-        self.__strategy = self.__broker.strategy_set.first()
-        self.__inst_ids = [inst.product_code for inst in self.__strategy.instruments.all()]
-
-    def update_position(self):
-        for _, pos in self.__shares.items():
-            try:
-                p_code = self.__re_extract_code.match(pos['InstrumentID']).group(1)
-                inst = Instrument.objects.get(product_code=p_code)
-                profit = pos['PositionProfitByTrade']
-                trade = Trade.objects.filter(
-                    broker=self.__broker, strategy=self.__strategy, instrument=inst, code=pos['InstrumentID'],
-                    direction=DirectionType.values[pos['Direction']], close_time__isnull=True).first()
-                if trade:
-                    trade.shares = (trade.closed_shares if trade.closed_shares else 0) + pos['Volume']
-                    trade.filled_shares = trade.shares
-                    trade.save(update_fields=['shares', 'filled_shares', 'profit'])
-                else:
-                    Trade.objects.create(
-                        broker=self.__broker, strategy=self.__strategy, instrument=inst, code=pos['InstrumentID'],
-                        direction=DirectionType.values[pos['Direction']],
-                        open_time=timezone.make_aware(datetime.datetime.strptime(pos['OpenDate'] + '08', '%Y%m%d%H')),
-                        shares=pos['Volume'], filled_shares=pos['Volume'], avg_entry_price=Decimal(pos['OpenPrice']),
-                        cost=pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money * inst.volume_multiple + pos[
-                            'Volume'] * inst.fee_volume, profit=profit, frozen_margin=Decimal(pos['Margin']))
-            except Exception as ee:
-                logger.warning(f'update_position 发生错误: {repr(ee)}', exc_info=True)
-                continue
 
     def calc_up_limit(self, inst: Instrument, bar: DailyBar):
         settlement = bar.settlement

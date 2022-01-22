@@ -254,13 +254,9 @@ async def update_from_dce(day: datetime.datetime) -> bool:
         logger.warning(f'update_from_dce failed: {repr(e)}', exc_info=True)
         return False
 
-xxx = 0
+
 async def update_from_cffex(day: datetime.datetime) -> bool:
     try:
-        global xxx
-        xxx += 1
-        if xxx <= 1:
-            return False
         async with aiohttp.ClientSession() as session:
             await max_conn_cffex.acquire()
             async with session.get(f"http://{cffex_ip}/fzjy/mrhq/{day.strftime('%Y%m/%d')}/index.xml") as response:
