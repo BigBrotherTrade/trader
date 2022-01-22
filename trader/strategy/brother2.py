@@ -127,6 +127,7 @@ class TradeStrategy(BaseModule):
                         old_pos['Volume'] += pos['Volume']
                         old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
                         old_pos['Margin'] += pos['Margin']
+            Trade.objects.exclude(code__in=shares_dict.keys()).delete()  # 删除不存在的头寸
             for _, pos in shares_dict.items():
                 p_code = self.__re_extract_code.match(pos['InstrumentID']).group(1)
                 inst = Instrument.objects.get(product_code=p_code)
