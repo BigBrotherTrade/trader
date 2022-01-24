@@ -197,7 +197,6 @@ class TradeStrategy(BaseModule):
         try:
             for inst in Instrument.objects.filter(main_code__isnull=False):
                 fee = await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code)
-                fee = fee[0]
                 inst.fee_money = Decimal(fee['CloseRatioByMoney'])
                 inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
                 inst.save(update_fields=['fee_money', 'fee_volume'])
@@ -259,7 +258,8 @@ class TradeStrategy(BaseModule):
             await asyncio.wait_for(task, HANDLER_TIME_OUT)
             await sub_client.punsubscribe()
             await sub_client.close()
-            return task.result()
+            result = task.result()
+            return result[0] if len(result) == 1 else result
         except Exception as e:
             logger.warning(f'{query_type} 发生错误: {repr(e)}', exc_info=True)
             if sub_client and channel_rsp_qry:
@@ -439,9 +439,10 @@ class TradeStrategy(BaseModule):
 
     @staticmethod
     def get_trade_string(trade: dict) -> str:
-        return f"成交订单: {trade['OrderRef']}, {trade['ExchangeID']}.{trade['InstrumentID']} " \
+        return f"{trade['ExchangeID']}.{trade['InstrumentID']} " \
                f"{OffsetFlag.values[trade['OffsetFlag']]}{DirectionType.values[trade['Direction']]}" \
-               f"已成交{trade['Volume']}手 价格:{trade['Price']:.3} 时间:{trade['TradeTime']}"
+               f"已成交{trade['Volume']}手 价格:{Decimal(trade['Price']):.3} 时间:{trade['TradeTime']} " \
+               f"订单号: {trade['OrderRef']}"
 
     @RegisterCallback(channel='MSG:CTP:RSP:TRADE:OnRtnTrade:*')
     async def OnRtnTrade(self, channel, trade: dict):
@@ -671,7 +672,7 @@ class TradeStrategy(BaseModule):
             logger.debug('查询股指和国债信号..')
             for sig in Signal.objects.filter(
                     instrument__exchange=ExchangeType.CFFEX, trigger_time__gte=self.__last_trading_day,
-                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False):
                 logger.info(f'发现股指和国债信号: {sig}')
                 self.process_signal(sig)
 
@@ -924,51 +925,50 @@ class TradeStrategy(BaseModule):
             logger.warning(f'calc_signal 发生错误: {repr(e)}', exc_info=True)
 
     def process_signal(self, signal: Signal):
-        """
-        :param signal: 信号
-        :return: None
-        """
-        price = signal.price
-        inst = signal.instrument
-        if signal.type == SignalType.BUY:
-            logger.info(f'{inst} 开多{signal.volume}手 价格: {price}')
-            self.io_loop.create_task(self.buy(inst, price, signal.volume))
-        elif signal.type == SignalType.SELL_SHORT:
-            logger.info(f'{inst} 开空{signal.volume}手 价格: {price}')
-            self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
-        elif signal.type == SignalType.BUY_COVER:
-            pos = Trade.objects.filter(
-                broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
-                close_time__isnull=True, direction=DirectionType.values[DirectionType.SHORT]).first()
-            logger.info(f'{pos.instrument} 平空{signal.volume}手 价格: {price}')
-            self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
-        elif signal.type == SignalType.SELL:
-            pos = Trade.objects.filter(
-                broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
-                close_time__isnull=True, direction=DirectionType.values[DirectionType.LONG]).first()
-            logger.info(f'{pos.instrument} 平多{signal.volume}手 价格: {price}')
-            self.io_loop.create_task(self.sell(pos, price, signal.volume))
-        elif signal.type == SignalType.ROLL_CLOSE:
-            pos = Trade.objects.filter(
-                broker=self.__broker, strategy=self.__strategy,
-                code=signal.code, close_time__isnull=True, instrument=inst, shares__gt=0).first()
-            if pos.direction == DirectionType.values[DirectionType.LONG]:
-                logger.info(f'{pos.code}->{inst.main_code} 多头换月平旧{signal.volume}手 价格: {price}')
-                self.io_loop.create_task(self.sell(pos, price, signal.volume))
-            else:
-                logger.info(f'{pos.code}->{inst.main_code} 空头换月平旧{signal.volume}手 价格: {price}')
-                self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
-        elif signal.type == SignalType.ROLL_OPEN:
-            pos = Trade.objects.filter(
-                Q(close_time__isnull=True) | Q(close_time__startswith=datetime.date.today()),
-                broker=self.__broker, strategy=self.__strategy,
-                shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
-            if pos.direction == DirectionType.values[DirectionType.LONG]:
-                logger.info(f'{pos.code}->{inst.main_code} 多头换月开新{signal.volume}手 价格: {price}')
+        try:
+            price = signal.price
+            inst = signal.instrument
+            if signal.type == SignalType.BUY:
+                logger.info(f'{inst} 开多{signal.volume}手 价格: {price}')
                 self.io_loop.create_task(self.buy(inst, price, signal.volume))
-            else:
-                logger.info(f'{pos.code}->{inst.main_code} 空头换月开新{signal.volume}手 价格: {price}')
+            elif signal.type == SignalType.SELL_SHORT:
+                logger.info(f'{inst} 开空{signal.volume}手 价格: {price}')
                 self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
+            elif signal.type == SignalType.BUY_COVER:
+                pos = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
+                    close_time__isnull=True, direction=DirectionType.values[DirectionType.SHORT]).first()
+                logger.info(f'{pos.instrument} 平空{signal.volume}手 价格: {price}')
+                self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
+            elif signal.type == SignalType.SELL:
+                pos = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
+                    close_time__isnull=True, direction=DirectionType.values[DirectionType.LONG]).first()
+                logger.info(f'{pos.instrument} 平多{signal.volume}手 价格: {price}')
+                self.io_loop.create_task(self.sell(pos, price, signal.volume))
+            elif signal.type == SignalType.ROLL_CLOSE:
+                pos = Trade.objects.filter(
+                    broker=self.__broker, strategy=self.__strategy,
+                    code=signal.code, close_time__isnull=True, instrument=inst, shares__gt=0).first()
+                if pos.direction == DirectionType.values[DirectionType.LONG]:
+                    logger.info(f'{pos.code}->{inst.main_code} 多头换月平旧{signal.volume}手 价格: {price}')
+                    self.io_loop.create_task(self.sell(pos, price, signal.volume))
+                else:
+                    logger.info(f'{pos.code}->{inst.main_code} 空头换月平旧{signal.volume}手 价格: {price}')
+                    self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
+            elif signal.type == SignalType.ROLL_OPEN:
+                pos = Trade.objects.filter(
+                    Q(close_time__isnull=True) | Q(close_time__startswith=datetime.date.today()),
+                    broker=self.__broker, strategy=self.__strategy,
+                    shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
+                if pos.direction == DirectionType.values[DirectionType.LONG]:
+                    logger.info(f'{pos.code}->{inst.main_code} 多头换月开新{signal.volume}手 价格: {price}')
+                    self.io_loop.create_task(self.buy(inst, price, signal.volume))
+                else:
+                    logger.info(f'{pos.code}->{inst.main_code} 空头换月开新{signal.volume}手 价格: {price}')
+                    self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
+        except Exception as e:
+            logger.warning(f'process_signal 发生错误: {repr(e)}', exc_info=True)
 
     async def force_close_all(self) -> bool:
         try:
