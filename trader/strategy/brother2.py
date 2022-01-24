@@ -69,7 +69,6 @@ class TradeStrategy(BaseModule):
 
     async def start(self):
         await self.install()
-        # await self.processing_signal2()
         self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=61)
         now = int(timezone.localtime().strftime('%H%M'))
         if 840 <= now <= 1550 or 2010 <= now <= 2359:  # 非交易时间查不到数据
@@ -644,6 +643,7 @@ class TradeStrategy(BaseModule):
 
     @RegisterCallback(crontab='55 8 * * *')
     async def processing_signal1(self):
+        await asyncio.sleep(5)
         day = timezone.localtime()
         _, trading = await is_trading_day(day)
         if trading:
@@ -668,6 +668,7 @@ class TradeStrategy(BaseModule):
 
     @RegisterCallback(crontab='25 9 * * *')
     async def processing_signal2(self):
+        await asyncio.sleep(5)
         day = timezone.localtime()
         _, trading = await is_trading_day(day)
         if trading:
@@ -692,6 +693,7 @@ class TradeStrategy(BaseModule):
 
     @RegisterCallback(crontab='55 20 * * *')
     async def processing_signal3(self):
+        await asyncio.sleep(5)
         day = timezone.localtime()
         _, trading = await is_trading_day(day)
         if trading:

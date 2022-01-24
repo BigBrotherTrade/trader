@@ -177,7 +177,7 @@ class Signal(models.Model):
         verbose_name_plural = '信号列表'
 
     def __str__(self):
-        return '{}-{}-{}'.format(self.strategy, self.instrument, self.type)
+        return f'{self.strategy}-{self.instrument}-{self.type}-{self.volume}手'
 
 
 class MainBar(models.Model):
