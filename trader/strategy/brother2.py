@@ -58,7 +58,8 @@ class TradeStrategy(BaseModule):
         self.__shares = dict()  # { instrument : position }
         self.__cur_account = None
         self.__margin = 0  # 占用保证金
-        self.__activeOrders = {}  # 未成交委托单
+        self.__activeOrders = dict()  # 未成交委托单
+        self.__cur_pos = dict()  # 持有头寸
         self.__re_extract_code = re.compile(r'([a-zA-Z]*)(\d+)')  # 提合约字母部分 IF1509 -> IF
         self.__re_extract_name = re.compile('(.*?)([0-9]+)(.*?)$')  # 提取合约文字部分
         self.__trading_day = timezone.make_aware(
@@ -105,30 +106,28 @@ class TradeStrategy(BaseModule):
             self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
             logger.debug(f"更新账户,可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
                          f"动态权益: {self.__current:,.0f} 虚拟: {self.__fake:,.0f}")
-            self.__strategy = self.__broker.strategy_set.first()
-            self.__inst_ids = [inst.product_code for inst in self.__strategy.instruments.all()]
         except Exception as e:
             logger.warning(f'refresh_account 发生错误: {repr(e)}', exc_info=True)
     
     async def refresh_position(self):
         try:
             pos_list = await self.query('InvestorPositionDetail')
-            shares_dict = {}
+            self.__cur_pos.clear()
             for pos in pos_list:
                 if 'empty' in pos and pos['empty'] is True:
                     continue
                 if pos['Volume'] > 0:
-                    old_pos = shares_dict.get(pos['InstrumentID'])
+                    old_pos = self.__cur_pos.get(pos['InstrumentID'])
                     if old_pos is None:
-                        shares_dict[pos['InstrumentID']] = pos
+                        self.__cur_pos[pos['InstrumentID']] = pos
                     else:
                         old_pos['OpenPrice'] = (old_pos['OpenPrice'] * old_pos['Volume'] +
                                                 pos['OpenPrice'] * pos['Volume']) / (old_pos['Volume'] + pos['Volume'])
                         old_pos['Volume'] += pos['Volume']
                         old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
                         old_pos['Margin'] += pos['Margin']
-            Trade.objects.exclude(code__in=shares_dict.keys()).delete()  # 删除不存在的头寸
-            for _, pos in shares_dict.items():
+            Trade.objects.exclude(code__in=self.__cur_pos.keys()).delete()  # 删除不存在的头寸
+            for _, pos in self.__cur_pos.items():
                 p_code = self.__re_extract_code.match(pos['InstrumentID']).group(1)
                 inst = Instrument.objects.get(product_code=p_code)
                 profit = pos['PositionProfitByTrade']
@@ -775,18 +774,19 @@ class TradeStrategy(BaseModule):
 
     def calculate(self, day):
         try:
-            for inst_obj in Instrument.objects.all():
-                logger.debug(f'计算连续合约, 交易信号: {inst_obj.name}')
-                calc_main_inst(inst_obj, day)
-                if inst_obj.product_code in self.__inst_ids:
-                    self.calc_signal(inst_obj, day)
+            p_code_set = set(self.__inst_ids)
+            for code in self.__cur_pos.keys():
+                p_code_set.add(self.__re_extract_code.match(code).group(1))
+            for inst in Instrument.objects.all():
+                logger.debug(f'计算连续合约, 交易信号: {inst.name}')
+                calc_main_inst(inst, day)
+                if inst.product_code in p_code_set:
+                    self.calc_signal(inst, day)
         except Exception as e:
             logger.warning(f'calculate 发生错误: {repr(e)}', exc_info=True)
 
     def calc_signal(self, inst: Instrument, day: datetime.datetime):
         try:
-            if inst.product_code not in self.__inst_ids:
-                return
             break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
             atr_n = self.__strategy.param_set.get(code='AtrPeriod').int_value
             long_n = self.__strategy.param_set.get(code='LongPeriod').int_value
