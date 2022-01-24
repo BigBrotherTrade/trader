@@ -798,8 +798,9 @@ class TradeStrategy(BaseModule):
             risk = self.__strategy.param_set.get(code='Risk').float_value
             df = to_df(MainBar.objects.filter(
                 time__lte=day.date(),
-                exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
-                'time', 'open', 'high', 'low', 'close', 'settlement'))
+                exchange=inst.exchange, product_code=inst.product_code).order_by('-time').values_list(
+                'time', 'open', 'high', 'low', 'close', 'settlement')[:200])  # 只读取最近200条记录，减少运算量
+            df = df.iloc[::-1]  # 日期升序排列
             df.index = pd.DatetimeIndex(df.time)
             df['atr'] = ATR(df.open, df.high, df.low, timeperiod=atr_n)
             df['short_trend'] = df.close
