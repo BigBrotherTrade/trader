@@ -90,6 +90,7 @@ class TradeStrategy(BaseModule):
     async def refresh_account(self):
         try:
             account = await self.query('TradingAccount')
+            account = account[0]
             # 静态权益=上日结算-出金金额+入金金额
             self.__pre_balance = Decimal(account['PreBalance']) - Decimal(
                 account['Withdraw']) + Decimal(account['Deposit'])
@@ -195,6 +196,7 @@ class TradeStrategy(BaseModule):
         try:
             for inst in Instrument.objects.filter(main_code__isnull=False):
                 fee = await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code)
+                fee = fee[0]
                 inst.fee_money = Decimal(fee['CloseRatioByMoney'])
                 inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
                 inst.save(update_fields=['fee_money', 'fee_volume'])
@@ -256,8 +258,7 @@ class TradeStrategy(BaseModule):
             await asyncio.wait_for(task, HANDLER_TIME_OUT)
             await sub_client.punsubscribe()
             await sub_client.close()
-            result = task.result()
-            return result[0] if len(result) == 1 else result
+            return task.result()
         except Exception as e:
             logger.warning(f'{query_type} 发生错误: {repr(e)}', exc_info=True)
             if sub_client and channel_rsp_qry:
