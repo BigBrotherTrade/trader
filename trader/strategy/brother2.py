@@ -503,7 +503,7 @@ class TradeStrategy(BaseModule):
                     signal = signal.filter(
                         code=trade['InstrumentID'], trigger_time__gte=self.__last_trading_day, volume=trade['Volume'],
                         strategy=self.__strategy, instrument=inst, processed=False).first()
-            else:  # 平仓 TODO: 部分成交的情况下，最后一笔成交完成时程序不会修改trade表对应的仓位
+            else:  # 平仓
                 open_direct = DirectionType.values[DirectionType.LONG] if \
                     trade['Direction'] == DirectionType.SHORT else DirectionType.values[DirectionType.SHORT]
                 last_trade = Trade.objects.filter(
