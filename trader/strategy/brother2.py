@@ -126,7 +126,7 @@ class TradeStrategy(BaseModule):
                         old_pos['Volume'] += pos['Volume']
                         old_pos['PositionProfitByTrade'] += pos['PositionProfitByTrade']
                         old_pos['Margin'] += pos['Margin']
-            Trade.objects.exclude(code__in=self.__cur_pos.keys()).delete()  # 删除不存在的头寸
+            Trade.objects.filter(~Q(code__in=self.__cur_pos.keys()), close_time__isnull=True).delete()  # 删除不存在的头寸
             for _, pos in self.__cur_pos.items():
                 p_code = self.__re_extract_code.match(pos['InstrumentID']).group(1)
                 inst = Instrument.objects.get(product_code=p_code)
@@ -438,10 +438,13 @@ class TradeStrategy(BaseModule):
 
     @staticmethod
     def get_trade_string(trade: dict) -> str:
-        return f"{trade['ExchangeID']}.{trade['InstrumentID']} " \
-               f"{OffsetFlag.values[trade['OffsetFlag']]}{DirectionType.values[trade['Direction']]}" \
-               f"已成交{trade['Volume']}手 价格:{Decimal(trade['Price']):.3} 时间:{trade['TradeTime']} " \
-               f"订单号: {trade['OrderRef']}"
+        if trade['OffsetFlag'] == OffsetFlag.Open:
+            open_direct = DirectionType.values[trade['Direction']]
+        else:
+            open_direct = DirectionType.values[DirectionType.LONG] if \
+                trade['Direction'] == DirectionType.SHORT else DirectionType.values[DirectionType.SHORT]
+        return f"{trade['ExchangeID']}.{trade['InstrumentID']} {OffsetFlag.values[trade['OffsetFlag']]}{open_direct}" \
+               f"已成交{trade['Volume']}手 价格:{trade['Price']} 时间:{trade['TradeTime']} 订单号: {trade['OrderRef']}"
 
     @RegisterCallback(channel='MSG:CTP:RSP:TRADE:OnRtnTrade:*')
     async def OnRtnTrade(self, channel, trade: dict):
@@ -506,7 +509,7 @@ class TradeStrategy(BaseModule):
                 last_trade = Trade.objects.filter(
                     Q(closed_shares__isnull=True) | Q(closed_shares__lt=F('shares')), shares=F('filled_shares'),
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
-                    open_time__lte=self.__trading_day, direction=open_direct).first()
+                    direction=open_direct).first()
                 print(connection.queries[-1]['sql'])
                 print(f'trade={last_trade}')
                 if last_trade:
