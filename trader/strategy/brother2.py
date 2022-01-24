@@ -745,11 +745,11 @@ class TradeStrategy(BaseModule):
             perform = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).order_by('-day').first()
             if perform is None:
-                unit = Decimal(1000000)
+                unit = self.__current + self.__fake
             else:
                 unit = perform.unit_count
-            nav = (self.__current + self.__fake) / unit
-            accumulated = (self.__current + self.__fake - dividend) / (unit - dividend)
+            nav = (self.__current + self.__fake) / (unit + self.__fake)
+            accumulated = (self.__current + self.__fake - dividend) / (unit + self.__fake - dividend)
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
                 'used_margin': self.__margin,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
