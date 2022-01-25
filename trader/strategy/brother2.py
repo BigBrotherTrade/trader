@@ -86,6 +86,7 @@ class TradeStrategy(BaseModule):
                 else:
                     self.save_order(order)
             await self.refresh_position()
+        # self.calculate(timezone.localtime(), create_main_bar=False)
 
     async def refresh_account(self):
         try:
@@ -778,14 +779,15 @@ class TradeStrategy(BaseModule):
             logger.warning(f'collect_quote 发生错误: {repr(e)}', exc_info=True)
         logger.debug('盘后计算完毕!')
 
-    def calculate(self, day):
+    def calculate(self, day, create_main_bar=True):
         try:
             p_code_set = set(self.__inst_ids)
             for code in self.__cur_pos.keys():
                 p_code_set.add(self.__re_extract_code.match(code).group(1))
             for inst in Instrument.objects.all():
-                logger.debug(f'计算连续合约, 交易信号: {inst.name}')
-                calc_main_inst(inst, day)
+                logger.debug(f'计算连续合约,交易信号: {inst.name}')
+                if create_main_bar:
+                    calc_main_inst(inst, day)
                 if inst.product_code in p_code_set:
                     self.calc_signal(inst, day)
         except Exception as e:
@@ -899,8 +901,8 @@ class TradeStrategy(BaseModule):
                                 'priority': PriorityType.Normal, 'processed': False})
             # 做多
             elif buy_sig:
-                volume = (self.__current + self.__fake) * risk // \
-                         (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
+                risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
+                volume = (self.__current + self.__fake) * risk // risk_each
                 if volume > 0:
                     signal = SignalType.BUY
                     signal_value = df.high_line[idx - 1]
@@ -908,11 +910,11 @@ class TradeStrategy(BaseModule):
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     price = self.calc_up_limit(inst, new_bar)
                 else:
-                    logger.info(f'做多单手风险={df.atr[idx] * inst.volume_multiple},超出风控额度，放弃。')
+                    logger.info(f'做多{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
             # 做空
             elif sell_sig:
-                volume = (self.__current + self.__fake) * risk // \
-                         (Decimal(df.atr[idx]) * Decimal(inst.volume_multiple))
+                risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
+                volume = (self.__current + self.__fake) * risk // risk_each
                 if volume > 0:
                     signal = SignalType.SELL_SHORT
                     signal_value = df.low_line[idx - 1]
@@ -920,14 +922,14 @@ class TradeStrategy(BaseModule):
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     price = self.calc_down_limit(inst, new_bar)
                 else:
-                    logger.info(f'做空单手风险={df.atr[idx] * inst.volume_multiple},超出风控额度，放弃。')
+                    logger.info(f'做空{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
             if signal:
                 sig, _ = Signal.objects.update_or_create(
                     code=inst.main_code,
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
                         'price': price, 'volume': volume, 'trigger_value': signal_value,
                         'priority': PriorityType.Normal, 'processed': False})
-                logger.info(f"新信号：{sig}")
+                logger.info(f"新信号: {sig}")
         except Exception as e:
             logger.warning(f'calc_signal 发生错误: {repr(e)}', exc_info=True)
 
