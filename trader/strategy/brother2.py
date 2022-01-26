@@ -807,7 +807,7 @@ class TradeStrategy(BaseModule):
                 'time', 'open', 'high', 'low', 'close', 'settlement')[:200])  # 只读取最近200条记录，减少运算量
             df = df.iloc[::-1]  # 日期升序排列
             df.index = pd.DatetimeIndex(df.time)
-            df['atr'] = ATR(df.open, df.high, df.low, timeperiod=atr_n)
+            df['atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
             df['short_trend'] = df.close
             df['long_trend'] = df.close
             # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend

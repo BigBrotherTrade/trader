@@ -588,7 +588,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
         exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
         'time', 'open', 'high', 'low', 'close', 'settlement'))
     df.index = pd.DatetimeIndex(df.time, tz=pytz.FixedOffset(480))
-    df['atr'] = ATR(df.open, df.high, df.low, timeperiod=atr_n)
+    df['atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
     # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend
     df['short_trend'] = df.close
     df['long_trend'] = df.close
