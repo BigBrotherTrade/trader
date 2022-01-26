@@ -784,11 +784,12 @@ class TradeStrategy(BaseModule):
             p_code_set = set(self.__inst_ids)
             for code in self.__cur_pos.keys():
                 p_code_set.add(self.__re_extract_code.match(code).group(1))
-            for inst in Instrument.objects.all():
-                logger.debug(f'计算连续合约,交易信号: {inst.name}')
+            for inst in Instrument.objects.all().order_by('exchange', 'product_code'):
                 if create_main_bar:
+                    logger.debug(f'生成连续合约: {inst.name}')
                     calc_main_inst(inst, day)
                 if inst.product_code in p_code_set:
+                    logger.debug(f'计算交易信号: {inst.name}')
                     self.calc_signal(inst, day)
         except Exception as e:
             logger.warning(f'calculate 发生错误: {repr(e)}', exc_info=True)
@@ -929,7 +930,9 @@ class TradeStrategy(BaseModule):
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
                         'price': price, 'volume': volume, 'trigger_value': signal_value,
                         'priority': PriorityType.Normal, 'processed': False})
-                logger.info(f"新信号: {sig}")
+
+                use_margin = price * volume * inst.volume_multiple * inst.margin_rate
+                logger.info(f"新信号: {sig} 预估保证金: {use_margin:.0f}({use_margin/10000:.1f}万)")
         except Exception as e:
             logger.warning(f'calc_signal 发生错误: {repr(e)}', exc_info=True)
 

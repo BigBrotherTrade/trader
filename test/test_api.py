@@ -29,7 +29,8 @@ import redis
 import asyncio
 import asynctest
 from datetime import datetime
-from trader.utils import update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument
+from trader.utils import update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument, \
+    load_kt_data
 from trader.utils.read_config import config
 
 
@@ -63,7 +64,7 @@ class APITest(asynctest.TestCase):
     async def test_get_contracts_argument(self):
         self.assertTrue(await get_contracts_argument(self.trading_day))
 
-    @asynctest.skipIf(False, 'no need')
+    @asynctest.skipIf(True, 'no need')
     async def test_get_all(self):
         print(f'tradingday: {self.trading_day}')
         tasks = [
@@ -75,3 +76,7 @@ class APITest(asynctest.TestCase):
         ]
         result = await asyncio.gather(*tasks, return_exceptions=True)
         self.assertEqual(result, [True, True, True, True, True])
+
+    @asynctest.skipIf(False, 'no need')
+    async def test_load_from_kt(self):
+        self.assertTrue(load_kt_data(r'D:\test'))

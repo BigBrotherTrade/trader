@@ -420,7 +420,7 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
         inst.save(update_fields=['main_code', 'change_time'])
         store_main_bar(check_bar)
     # 主力合约发生变化, 做换月处理
-    elif check_bar is not None and inst.main_code != check_bar.code and check_bar.code > inst.main_code:
+    elif check_bar and inst.main_code != check_bar.code and check_bar.code > inst.main_code:
         inst.last_main = inst.main_code
         inst.main_code = check_bar.code
         inst.change_time = day
@@ -726,35 +726,39 @@ async def clean_daily_bar():
     print('done!')
 
 
-def load_kt_data(directory: str = '/Users/jeffchen/kt_data/'):
+def load_kt_data(directory: str = r'D:\test'):
+    """PK99.txt
+    1210224,10944.000  ,10992.000  ,10758.000  ,10904.000  ,10702.000  ,42202  ,20897  ,PK2110
     """
-    20100104,4121.000,4131.000,4090.000,4098.000,284296.0,321838,a1009
-    """
-    for filename in os.listdir(directory):
-        if filename.endswith(".txt"):
-            code_str = filename.split('9', maxsplit=1)[0]
-            market, code = code_str.split('_')
-            print('process', code)
+    try:
+        for filename in os.listdir(directory):
+            if not filename.endswith(".txt"):
+                continue
+            code = filename.split('9', maxsplit=1)[0]
+            inst = Instrument.objects.get(product_code=code)
+            print('process', inst)
             cur_main = last_main = change_time = None
             insert_list = []
             with open(os.path.join(directory, filename)) as f:
                 for line in f:
-                    date, oo, hh, ll, cc, se, oi, vo, main_code = line.split(',')
-                    main_code = main_code[:-1]
+                    date, oo, hh, ll, cc, se, oi, vo, main_code = [part.strip() for part in line.split(',')]
+                    date = f'{int(date[:3])+1900}-{date[3:5]}-{date[5:7]}'
+                    date = timezone.make_aware(datetime.datetime.strptime(date, '%Y-%m-%d'))
                     if cur_main != main_code:
                         if last_main != main_code:
                             last_main = cur_main
                         cur_main = main_code
-                        change_time = '{}-{}-{}'.format(date[:4], date[4:6], date[6:8])
-                    insert_list.append(
-                        MainBar(
-                            exchange=KT_MARKET[market], product_code=code, code=main_code,
-                            time='{}-{}-{}'.format(date[:4], date[4:6], date[6:8]),
-                            open=oo, high=hh, low=ll, close=cc, settlement=se, open_interest=oi, volume=vo,
-                            basis=None))
+                        change_time = date
+                    insert_list.append(MainBar(
+                        exchange=inst.exchange, product_code=code, code=main_code, time=date, open=oo, high=hh, low=ll,
+                        close=cc, settlement=se, open_interest=oi, volume=vo, basis=None))
             MainBar.objects.bulk_create(insert_list)
             Instrument.objects.filter(product_code=code).update(
                 last_main=last_main, main_code=cur_main, change_time=change_time)
+        return True
+    except Exception as e:
+        logger.warning(f'load_kt_data failed: {repr(e)}', exc_info=True)
+        return False
 
 
 # 从交易所获取合约当日的涨跌停幅度
