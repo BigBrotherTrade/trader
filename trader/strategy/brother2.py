@@ -741,7 +741,7 @@ class TradeStrategy(BaseModule):
         today, trading = await is_trading_day(timezone.localtime())
         if trading:
             logger.info(f"更新净值，可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
-                        f"动态权益: {self.__current:,.0f} 虚拟: {self.__fake:,.0f}")
+                        f"动态权益: {self.__current:,.0f} 保证金: {self.__margin:,.0f} 虚拟: {self.__fake:,.0f}")
             dividend = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).aggregate(Sum('dividend'))['dividend__sum']
             if dividend is None:
