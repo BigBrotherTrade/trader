@@ -78,7 +78,7 @@ class APITest(asynctest.TestCase):
     async def test_load_from_kt(self):
         self.assertTrue(load_kt_data(r'D:\test'))
 
-    @asynctest.skipIf(False, 'no need')
+    @asynctest.skipIf(True, 'no need')
     async def test_create_main(self):
         inst = Instrument.objects.get(product_code='eb')
         self.assertTrue(create_main(inst))

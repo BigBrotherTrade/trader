@@ -90,6 +90,7 @@ class TradeStrategy(BaseModule):
 
     async def refresh_account(self):
         try:
+            logger.debug('更新账户')
             account = await self.query('TradingAccount')
             account = account[0]
             # 静态权益=上日结算-出金金额+入金金额
@@ -112,6 +113,7 @@ class TradeStrategy(BaseModule):
     
     async def refresh_position(self):
         try:
+            logger.debug('更新持仓...')
             pos_list = await self.query('InvestorPositionDetail')
             self.__cur_pos.clear()
             for pos in pos_list:
@@ -147,11 +149,13 @@ class TradeStrategy(BaseModule):
                         shares=pos['Volume'], filled_shares=pos['Volume'], avg_entry_price=Decimal(pos['OpenPrice']),
                         cost=pos['Volume'] * Decimal(pos['OpenPrice']) * inst.fee_money * inst.volume_multiple + pos[
                             'Volume'] * inst.fee_volume, profit=profit, frozen_margin=Decimal(pos['Margin']))
+            logger.debug('更新持仓完成!')
         except Exception as e:
             logger.warning(f'refresh_position 发生错误: {repr(e)}', exc_info=True)
     
     async def refresh_instrument(self):
         try:
+            logger.debug("更新合约...")
             inst_dict = defaultdict(dict)
             inst_list = await self.query('Instrument')
             for inst in inst_list:
@@ -166,7 +170,6 @@ class TradeStrategy(BaseModule):
                     inst_dict[inst['ProductID']][inst['InstrumentID']]['exchange'] = inst['ExchangeID']
                     inst_dict[inst['ProductID']][inst['InstrumentID']]['multiple'] = inst['VolumeMultiple']
                     inst_dict[inst['ProductID']][inst['InstrumentID']]['price_tick'] = inst['PriceTick']
-                    inst_dict[inst['ProductID']][inst['InstrumentID']]['margin'] = inst['LongMarginRatio']
             for code in inst_dict.keys():
                 all_inst = ','.join(sorted(inst_dict[code].keys()))
                 inst_data = list(inst_dict[code].values())[0]
@@ -180,16 +183,25 @@ class TradeStrategy(BaseModule):
                 inst_data['name'] = valid_name
                 inst, created = Instrument.objects.update_or_create(product_code=code, exchange=inst_data['exchange'])
                 print(f"inst:{inst} created:{created} main_code:{inst.main_code}")
+                update_field_list = list()
+                # 更新主力合约的保证金和手续费
+                if inst.main_code:
+                    margin_rate = await self.query('InstrumentMarginRate', InstrumentID=inst.main_code)
+                    inst.margin_rate = margin_rate[0]['LongMarginRatioByMoney']
+                    fee = await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code)
+                    inst.fee_money = Decimal(fee[0]['CloseRatioByMoney'])
+                    inst.fee_volume = Decimal(fee[0]['CloseRatioByVolume'])
+                    update_field_list += ['margin_rate', 'fee_money', 'fee_volume']
                 if created:
                     inst.name = inst_data['name']
                     inst.volume_multiple = inst_data['multiple']
                     inst.price_tick = inst_data['price_tick']
-                    inst.margin_rate = inst_data['margin']
-                    inst.save(update_fields=['name', 'volume_multiple', 'price_tick', 'margin_rate'])
+                    update_field_list += ['name', 'volume_multiple', 'price_tick']
                 elif inst.main_code:
-                    inst.margin_rate = inst_dict[code][inst.main_code]['margin']
                     inst.all_inst = all_inst
-                    inst.save(update_fields=['margin_rate', 'all_inst'])
+                    update_field_list.append('all_inst')
+                inst.save(update_fields=update_field_list)
+            logger.debug("更新合约完成!")
         except Exception as e:
             logger.warning(f'refresh_instrument 发生错误: {repr(e)}', exc_info=True)
 
@@ -725,15 +737,9 @@ class TradeStrategy(BaseModule):
         if not trading:
             logger.info('今日是非交易日, 不更新任何数据。')
             return
-        logger.debug('更新账户')
         await self.refresh_account()
-        logger.debug('更新合约数据..')
         await self.refresh_instrument()
-        await self.refresh_fee()
-        logger.debug('更新持仓')
         await self.refresh_position()
-        logger.debug('更新手续费')
-        await self.refresh_fee()
         logger.debug('全部更新完成!')
 
     @RegisterCallback(crontab='30 15 * * *')
