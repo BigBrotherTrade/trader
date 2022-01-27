@@ -846,6 +846,7 @@ class TradeStrategy(BaseModule):
                     sell_sig = True
                 self.__strategy.force_opens.remove(inst)
             signal = None
+            signal_code = None
             signal_value = None
             price = None
             volume = None
@@ -858,6 +859,7 @@ class TradeStrategy(BaseModule):
                     # 多头止损
                     if df.close[idx] <= hh - df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.SELL
+                        signal_code = pos.code
                         # 止损时 signal_value 为止损价
                         signal_value = hh - df.atr[pos_idx - 1] * stop_n
                         volume = pos.shares
@@ -888,6 +890,7 @@ class TradeStrategy(BaseModule):
                     # 空头止损
                     if df.close[idx] >= ll + df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.BUY_COVER
+                        signal_code = pos.code
                         signal_value = ll + df.atr[pos_idx - 1] * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
@@ -934,7 +937,7 @@ class TradeStrategy(BaseModule):
                     logger.info(f'做空{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
             if signal:
                 sig, _ = Signal.objects.update_or_create(
-                    code=inst.main_code,
+                    code=signal_code if signal_code else inst.main_code,
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
                         'price': price, 'volume': volume, 'trigger_value': signal_value,
                         'priority': PriorityType.Normal, 'processed': False})
