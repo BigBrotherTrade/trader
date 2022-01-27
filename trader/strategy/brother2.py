@@ -463,7 +463,11 @@ class TradeStrategy(BaseModule):
             trade_cost = trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * inst.volume_multiple + \
                 trade['Volume'] * inst.fee_volume
             trade_margin = trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
-            trade_time = timezone.localtime()
+            now = timezone.localtime()
+            trade_time = timezone.make_aware(
+                datetime.datetime.strptime(trade['TradeDate'] + trade['TradeTime'], '%Y%m%d%H:%M:%S'))
+            if trade_time.date() > now.date():
+                trade_time.replace(year=now.year, month=now.month, day=now.day)
             new_trade = False
             manual_trade = False
             trade_completed = False
@@ -565,7 +569,7 @@ class TradeStrategy(BaseModule):
         order_ref = Decimal(order['OrderRef'])
         if order_ref < 100000:  # 非本程序生成订单
             return None, None
-        return Order.objects.update_or_create(order_ref=order['OrderRef'], code=order['InstrumentID'], defaults={
+        odr, create = Order.objects.update_or_create(order_ref=order['OrderRef'], code=order['InstrumentID'], defaults={
             'broker': self.__broker, 'strategy': self.__strategy, 'instrument': inst, 'front': order['FrontID'],
             'session': order['SessionID'], 'price': order['LimitPrice'], 'volume': order['VolumeTotalOriginal'],
             'direction': DirectionType.values[order['Direction']], 'status': OrderStatus.values[order['OrderStatus']],
@@ -573,6 +577,11 @@ class TradeStrategy(BaseModule):
             'send_time': timezone.make_aware(
                 datetime.datetime.strptime(order['InsertDate'] + order['InsertTime'], '%Y%m%d%H:%M:%S')),
             'update_time': timezone.localtime()})
+        now = timezone.localtime().date()
+        if create and odr.send_time.date() > timezone.localtime().date():
+            odr.send_time.replace(year=now.year, month=now.month, day=now.day)
+            odr.save(update_fields=['send_time'])
+        return odr, create
 
     @staticmethod
     def get_order_string(order: dict) -> str:
