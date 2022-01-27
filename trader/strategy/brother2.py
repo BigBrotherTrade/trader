@@ -58,6 +58,8 @@ class TradeStrategy(BaseModule):
         self.__shares = dict()  # { instrument : position }
         self.__cur_account = None
         self.__margin = 0  # 占用保证金
+        self.__withdraw = 0  # 出金
+        self.__deposit = 0  # 入金
         self.__activeOrders = dict()  # 未成交委托单
         self.__cur_pos = dict()  # 持有头寸
         self.__re_extract_code = re.compile(r'([a-zA-Z]*)(\d+)')  # 提合约字母部分 IF1509 -> IF
@@ -93,9 +95,12 @@ class TradeStrategy(BaseModule):
             logger.debug('更新账户')
             account = await self.query('TradingAccount')
             account = account[0]
-            # 静态权益=上日结算-出金金额+入金金额
-            self.__pre_balance = Decimal(account['PreBalance']) - Decimal(
-                account['Withdraw']) + Decimal(account['Deposit'])
+            self.__withdraw = Decimal(account['Withdraw'])
+            self.__deposit = Decimal(account['Deposit'])
+            # 虚拟=虚拟(原始)-入金+出金
+            self.__fake = self.__fake - self.__deposit + self.__withdraw
+            # 静态权益=上日结算+入金金额-出金金额
+            self.__pre_balance = Decimal(account['PreBalance']) + self.__deposit - self.__withdraw
             # 动态权益=静态权益+平仓盈亏+持仓盈亏-手续费
             self.__current = self.__pre_balance + Decimal(account['CloseProfit']) + Decimal(
                 account['PositionProfit']) - Decimal(account['Commission'])
@@ -105,9 +110,9 @@ class TradeStrategy(BaseModule):
             self.__broker.cash = self.__cash
             self.__broker.current = self.__current
             self.__broker.pre_balance = self.__pre_balance
-            self.__broker.save(update_fields=['cash', 'current', 'pre_balance'])
+            self.__broker.save(update_fields=['cash', 'current', 'pre_balance', 'fake'])
             logger.debug(f"更新账户,可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
-                         f"动态权益: {self.__current:,.0f} 虚拟: {self.__fake:,.0f}")
+                         f"动态权益: {self.__current:,.0f} 出入金: {self.__withdraw:,.0f} 虚拟: {self.__fake:,.0f}")
         except Exception as e:
             logger.warning(f'refresh_account 发生错误: {repr(e)}', exc_info=True)
     
@@ -458,8 +463,7 @@ class TradeStrategy(BaseModule):
             trade_cost = trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * inst.volume_multiple + \
                 trade['Volume'] * inst.fee_volume
             trade_margin = trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
-            trade_time = timezone.make_aware(
-                datetime.datetime.strptime(trade['TradeDate'] + trade['TradeTime'], '%Y%m%d%H:%M:%S'))
+            trade_time = timezone.localtime()
             new_trade = False
             manual_trade = False
             trade_completed = False
@@ -738,18 +742,20 @@ class TradeStrategy(BaseModule):
                         f"动态权益: {self.__current:,.0f} 保证金: {self.__margin:,.0f} 虚拟: {self.__fake:,.0f}")
             dividend = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).aggregate(Sum('dividend'))['dividend__sum']
+            perf = Performance.objects.last()
             if dividend is None:
                 dividend = Decimal(0)
+            dividend = dividend + self.__deposit - self.__withdraw
             perform = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).order_by('-day').first()
             if perform is None:
-                unit = self.__current + self.__fake
+                unit = self.__current  # 第一次计算
             else:
-                unit = perform.unit_count
-            nav = (self.__current + self.__fake) / (unit + self.__fake)
-            accumulated = (self.__current + self.__fake - dividend) / (unit + self.__fake - dividend)
+                unit = perf.unit_count + dividend
+            nav = (self.__current + dividend) / (unit + dividend)
+            accumulated = (self.__current + dividend) / (unit + dividend)  # TODO: 计算累计净值
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
-                'used_margin': self.__margin,
+                'used_margin': self.__margin, 'dividend': dividend,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
 
     @RegisterCallback(crontab='0 17 * * *')
