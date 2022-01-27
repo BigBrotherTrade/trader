@@ -205,18 +205,6 @@ class TradeStrategy(BaseModule):
         except Exception as e:
             logger.warning(f'refresh_instrument 发生错误: {repr(e)}', exc_info=True)
 
-    async def refresh_fee(self):
-        try:
-            for inst in Instrument.objects.filter(main_code__isnull=False):
-                fee = await self.query('InstrumentCommissionRate', InstrumentID=inst.main_code)
-                fee = fee[0]
-                inst.fee_money = Decimal(fee['CloseRatioByMoney'])
-                inst.fee_volume = Decimal(fee['CloseRatioByVolume'])
-                inst.save(update_fields=['fee_money', 'fee_volume'])
-                logger.debug(f"{inst} 已更新手续费")
-        except Exception as e:
-            logger.warning(f'refresh_fee 发生错误: {repr(e)}', exc_info=True)
-
     def next_order_ref(self):
         self.__order_ref = 1 if self.__order_ref == 999 else self.__order_ref + 1
         now = datetime.datetime.now()
