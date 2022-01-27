@@ -25,12 +25,9 @@ else:
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
 os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
-import redis
-import asyncio
 import asynctest
+from trader.utils import *
 from datetime import datetime
-from trader.utils import update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument, \
-    load_kt_data
 from trader.utils.read_config import config
 
 
@@ -77,6 +74,11 @@ class APITest(asynctest.TestCase):
         result = await asyncio.gather(*tasks, return_exceptions=True)
         self.assertEqual(result, [True, True, True, True, True])
 
-    @asynctest.skipIf(False, 'no need')
+    @asynctest.skipIf(True, 'no need')
     async def test_load_from_kt(self):
         self.assertTrue(load_kt_data(r'D:\test'))
+
+    @asynctest.skipIf(False, 'no need')
+    async def test_create_main(self):
+        inst = Instrument.objects.get(product_code='eb')
+        self.assertTrue(create_main(inst))

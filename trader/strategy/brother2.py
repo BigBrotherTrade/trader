@@ -805,18 +805,18 @@ class TradeStrategy(BaseModule):
             df = to_df(MainBar.objects.filter(
                 time__lte=day.date(),
                 exchange=inst.exchange, product_code=inst.product_code).order_by('-time').values_list(
-                'time', 'open', 'high', 'low', 'close', 'settlement')[:200])  # 只读取最近200条记录，减少运算量
+                'time', 'open', 'high', 'low', 'close', 'settlement')[:400])  # 只读取最近400条记录，减少运算量
             df = df.iloc[::-1]  # 日期升序排列
             df.index = pd.DatetimeIndex(df.time)
-            df['atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
-            df['short_trend'] = df.close
-            df['long_trend'] = df.close
+            df.loc[:, 'atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
+            df.loc[:, 'short_trend'] = df.close
+            df.loc[:, 'long_trend'] = df.close
             # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend
             for idx in range(1, df.shape[0]):
                 df.iloc[idx, 7] = (df.iloc[idx - 1, 7] * (short_n - 1) + df.iloc[idx, 4]) / short_n
                 df.iloc[idx, 8] = (df.iloc[idx - 1, 8] * (long_n - 1) + df.iloc[idx, 4]) / long_n
-            df['high_line'] = df.close.rolling(window=break_n).max()
-            df['low_line'] = df.close.rolling(window=break_n).min()
+            df.loc[:, 'high_line'] = df.close.rolling(window=break_n).max()
+            df.loc[:, 'low_line'] = df.close.rolling(window=break_n).min()
             idx = -1
             pos_idx = None
             buy_sig = df.short_trend[idx] > df.long_trend[idx] and int(df.close[idx]) >= int(df.high_line[idx - 1])

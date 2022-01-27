@@ -28,7 +28,7 @@ from itertools import combinations
 
 import pytz
 import aiohttp
-from django.db.models import F, Max, Min
+from django.db.models import Q, F, Max, Min
 from django.utils import timezone
 import demjson
 import redis
@@ -54,7 +54,7 @@ shfe_ip = 'www.shfe.com.cn'      # www.shfe.com.cn
 czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
 dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
 # ts_api = tushare.pro_api(config.get('Tushare', 'token'))
-IGNORE_INST_LIST = "WH,bb,JR,RI,RS,LR,PM,im".split(',')  # TODO: 先这么放着吧
+IGNORE_INST_LIST = config.get('TRADE', 'ignore_inst').split(',')
 INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
 
 
@@ -199,8 +199,8 @@ async def update_from_czce(day: datetime.datetime) -> bool:
                             'low': inst_data[4].replace(',', '') if Decimal(inst_data[4].replace(',', '')) > 0.1
                             else close,
                             'close': close,
-                            'settlement': inst_data[6].replace(',', '') if Decimal(inst_data[6].replace(',', '')) > 0.1 else
-                            inst_data[1].replace(',', ''),
+                            'settlement': inst_data[6].replace(',', '') if
+                            Decimal(inst_data[6].replace(',', '')) > 0.1 else inst_data[1].replace(',', ''),
                             'volume': inst_data[9].replace(',', ''),
                             'open_interest': inst_data[10].replace(',', '')})
                 return True
@@ -227,7 +227,8 @@ async def update_from_dce(day: datetime.datetime) -> bool:
                         if len(cell) > 0:
                             inst_data.append(cell)
                     """
-    [0'商品名称', 1'交割月份', 2'开盘价', 3'最高价', 4'最低价', 5'收盘价', 6'前结算价', 7'结算价', 8'涨跌', 9'涨跌1', 10'成交量', 11'持仓量', 12'持仓量变化', 13'成交额']
+    [0'商品名称', 1'交割月份', 2'开盘价', 3'最高价', 4'最低价', 5'收盘价', 6'前结算价', 7'结算价', 8'涨跌', 9'涨跌1', 10'成交量', 
+     11'持仓量', 12'持仓量变化', 13'成交额']
     ['豆一', '1611', '3,760', '3,760', '3,760', '3,760', '3,860', '3,760', '-100', '-100', '2', '0', '0', '7.52']
                     """
                     if '小计' in inst_data[0]:
@@ -340,9 +341,9 @@ async def update_from_sina(day: datetime.datetime, inst: Instrument):
         logger.warning(f'update_from_sina failed: {repr(e)}', exc_info=True)
 
 
-def store_main_bar(bar: DailyBar):
+def store_main_bar(inst: Instrument, bar: DailyBar):
     MainBar.objects.update_or_create(
-        exchange=bar.exchange, product_code=re.findall('[A-Za-z]+', bar.code)[0], time=bar.time, defaults={
+        exchange=inst.exchange, product_code=inst.product_code, time=bar.time, defaults={
             'code': bar.code,
             'open': bar.open,
             'high': bar.high,
@@ -357,102 +358,56 @@ def handle_rollover(inst: Instrument, new_bar: DailyBar):
     """
     换月处理, 基差=新合约收盘价-旧合约收盘价, 从今日起之前的所有连续合约的OHLC加上基差
     """
-    product_code = re.findall('[A-Za-z]+', new_bar.code)[0]
     old_bar = DailyBar.objects.filter(exchange=inst.exchange, code=inst.last_main, time=new_bar.time).first()
-    main_bar = MainBar.objects.get(
-        exchange=inst.exchange, product_code=product_code, time=new_bar.time)
-    if old_bar is None:
-        old_close = new_bar.close
-    else:
-        old_close = old_bar.close
+    main_bar = MainBar.objects.get(exchange=inst.exchange, product_code=inst.product_code, time=new_bar.time)
+    old_close = old_bar.close if old_bar else new_bar.close
     basis = new_bar.close - old_close
     main_bar.basis = basis
     basis = float(basis)
     main_bar.save(update_fields=['basis'])
-    MainBar.objects.filter(exchange=inst.exchange, product_code=product_code, time__lt=new_bar.time).update(
-        open=F('open') + basis, high=F('high') + basis,
-        low=F('low') + basis, close=F('close') + basis, settlement=F('settlement') + basis)
+    MainBar.objects.filter(exchange=inst.exchange, product_code=inst.product_code, time__lt=new_bar.time).update(
+        open=F('open') + basis, high=F('high') + basis, low=F('low') + basis, close=F('close') + basis,
+        settlement=F('settlement') + basis)
 
 
 def calc_main_inst(inst: Instrument, day: datetime.datetime):
-    """
-    [["2016-07-18","2116.000","2212.000","2106.000","2146.000","34"],...]
-    """
     updated = False
-    if inst.main_code is not None:
-        expire_date = get_expire_date(inst.main_code, day)
-    else:
-        expire_date = day.strftime('%y%m')
+    expire_date = get_expire_date(inst.main_code, day) if inst.main_code else day.strftime('%y%m')
     # 条件1: 成交量最大 & (成交量>1万 & 持仓量>1万 or 股指) = 主力合约
-    if inst.exchange == ExchangeType.CFFEX:
-        check_bar = DailyBar.objects.filter(
-            exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-            expire_date__gte=expire_date,
-            time=day.date()).order_by('-volume').first()
-    else:
-        check_bar = DailyBar.objects.filter(
-            exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-            expire_date__gte=expire_date,
-            time=day.date(), volume__gte=10000, open_interest__gte=10000).order_by('-volume').first()
+    check_bar = DailyBar.objects.filter(
+        (Q(exchange=ExchangeType.CFFEX) | (Q(volume__gte=10000) & Q(open_interest__gte=10000))),
+        exchange=inst.exchange, code__regex=f"^{inst.product_code}[0-9]+",
+        expire_date__gte=expire_date, time=day.date()).order_by('-volume').first()
     # 条件2: 不满足条件1但是连续3天成交量最大 = 主力合约
     if check_bar is None:
-        check_bars = list(DailyBar.objects.raw(
-            "SELECT a.* FROM panel_dailybar a INNER JOIN(SELECT time, max(volume) v, max(open_interest) i "
-            "FROM panel_dailybar WHERE EXCHANGE=%s and CODE RLIKE %s GROUP BY time) b ON a.time = b.time "
-            "AND a.volume = b.v AND a.open_interest = b.i "
-            "where a.exchange=%s and code Rlike %s AND a.time <= %s ORDER BY a.time desc LIMIT 3",
-            [inst.exchange, '^{}[0-9]+'.format(inst.product_code)] * 2 + [day.strftime('%y/%m/%d')]))
-        if len(set(bar.code for bar in check_bars)) == 1:
-            check_bar = check_bars[0]
-        else:
-            check_bar = None
-    # 之前没有主力合约, 取当前成交量最大的作为主力
-    if inst.main_code is None:
-        if check_bar is None:
-            check_bar = DailyBar.objects.filter(
-                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                expire_date__gte=expire_date, time=day.date()).order_by(
-                '-volume', '-open_interest', 'code').first()
-            if check_bar is None:
-                logger.error(f"calc_main_inst 未找到主力合约：{inst}")
+        check_bars = DailyBar.objects.raw(
+            "SELECT id, max(volume) v FROM panel_dailybar WHERE CODE RLIKE %s GROUP BY time "
+            "ORDER BY time DESC LIMIT 3", [f"^{inst.product_code}[0-9]+"])
+        check_bar = check_bars[0] if len(set(bar.code for bar in check_bars)) == 1 else None
+    # 条件3: 取当前成交量最大的作为主力
+    if check_bar is None:
+        check_bar = DailyBar.objects.filter(
+            exchange=inst.exchange, code__regex=f"^{inst.product_code}[0-9]+",
+            expire_date__gte=expire_date, time=day.date()).order_by('-volume', '-open_interest', 'code').first()
+    if check_bar is None:
+        logger.error(f"calc_main_inst 未找到主力合约：{inst}")
+    if inst.main_code is None:  # 之前没有主力合约
         inst.main_code = check_bar.code
         inst.change_time = day
         inst.save(update_fields=['main_code', 'change_time'])
-        store_main_bar(check_bar)
-    # 主力合约发生变化, 做换月处理
-    elif check_bar and inst.main_code != check_bar.code and check_bar.code > inst.main_code:
-        inst.last_main = inst.main_code
-        inst.main_code = check_bar.code
-        inst.change_time = day
-        inst.save(update_fields=['last_main', 'main_code', 'change_time'])
-        store_main_bar(check_bar)
-        handle_rollover(inst, check_bar)
-        updated = True
+        store_main_bar(inst, check_bar)
     else:
-        bar = DailyBar.objects.filter(exchange=inst.exchange, code=inst.main_code, time=day).first()
-        # 若当前主力合约当天成交量为0, 需要换下一个合约
-        if bar is None or bar.volume == 0 or bar.open_interest == Decimal(0):
-            check_bar = DailyBar.objects.filter(
-                exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code),
-                expire_date__gte=expire_date, time=day.date()).order_by(
-                '-volume', '-open_interest').first()
-            print('check_bar=', check_bar)
-            if check_bar is None:
-                _, trading = asyncio.get_running_loop().run_until_complete(is_trading_day(day))
-                if not trading:
-                    return inst.main_code, updated
-            if bar is None or bar.code != check_bar.code:
-                inst.last_main = inst.main_code
-                inst.main_code = check_bar.code
-                inst.change_time = day
-                inst.save(update_fields=['last_main', 'main_code', 'change_time'])
-                store_main_bar(check_bar)
-                handle_rollover(inst, check_bar)
-                updated = True
-            else:
-                store_main_bar(bar)
+        # 主力合约发生变化, 做换月处理
+        if check_bar and inst.main_code != check_bar.code and check_bar.code > inst.main_code:
+            inst.last_main = inst.main_code
+            inst.main_code = check_bar.code
+            inst.change_time = day
+            inst.save(update_fields=['last_main', 'main_code', 'change_time'])
+            store_main_bar(inst, check_bar)
+            handle_rollover(inst, check_bar)
+            updated = True
         else:
-            store_main_bar(bar)
+            store_main_bar(inst, check_bar)
     return inst.main_code, updated
 
 
@@ -466,10 +421,11 @@ def create_main(inst: Instrument):
             print(day, calc_main_inst(inst, timezone.make_aware(datetime.datetime.combine(day, datetime.time.min))))
     else:
         for day in DailyBar.objects.filter(
-                # time__gte=datetime.datetime.strptime('20211211', '%Y%m%d'),
+                time__gt=inst.change_time,
                 exchange=inst.exchange, code__regex='^{}[0-9]+'.format(inst.product_code)).order_by(
                 'time').values_list('time', flat=True).distinct():
             print(day, calc_main_inst(inst, timezone.make_aware(datetime.datetime.combine(day, datetime.time.min))))
+    return True
 
 
 def create_main_all():
