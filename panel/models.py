@@ -177,7 +177,8 @@ class Signal(models.Model):
         verbose_name_plural = '信号列表'
 
     def __str__(self):
-        return f'{self.instrument}({self.code})-{self.type}-{self.volume}手'
+        return f"{self.instrument}({self.code})-{self.type}-{self.volume}手" \
+               f"{'(夜盘)' if self.instrument.night_trade else ''}"
 
 
 class MainBar(models.Model):
