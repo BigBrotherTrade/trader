@@ -755,14 +755,13 @@ class TradeStrategy(BaseModule):
             if dividend is None:
                 dividend = Decimal(0)
             dividend = dividend + self.__deposit - self.__withdraw
-            perform = Performance.objects.filter(
-                broker=self.__broker, day__lt=today.date()).order_by('-day').first()
+            perform = Performance.objects.first()
             if perform is None:
                 unit = self.__current  # 第一次计算
             else:
-                unit = perf.unit_count + dividend
-            nav = (self.__current + dividend) / (unit + dividend)
-            accumulated = (self.__current + dividend) / (unit + dividend)  # TODO: 计算累计净值
+                unit = perf.unit_count
+            nav = self.__current / unit  # 单位净值
+            accumulated = (self.__current - dividend) / unit  # 累计净值
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
                 'used_margin': self.__margin, 'dividend': dividend,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
