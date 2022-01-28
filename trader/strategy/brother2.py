@@ -99,6 +99,8 @@ class TradeStrategy(BaseModule):
             self.__deposit = Decimal(account['Deposit'])
             # 虚拟=虚拟(原始)-入金+出金
             self.__fake = self.__fake - self.__deposit + self.__withdraw
+            if self.__fake < 1:
+                self.__fake = 0
             # 静态权益=上日结算+入金金额-出金金额
             self.__pre_balance = Decimal(account['PreBalance']) + self.__deposit - self.__withdraw
             # 动态权益=静态权益+平仓盈亏+持仓盈亏-手续费
@@ -747,24 +749,20 @@ class TradeStrategy(BaseModule):
     async def update_equity(self):
         today, trading = await is_trading_day(timezone.localtime())
         if trading:
-            logger.info(f"更新净值，可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
-                        f"动态权益: {self.__current:,.0f} 保证金: {self.__margin:,.0f} 虚拟: {self.__fake:,.0f}")
             dividend = Performance.objects.filter(
                 broker=self.__broker, day__lt=today.date()).aggregate(Sum('dividend'))['dividend__sum']
-            perf = Performance.objects.last()
             if dividend is None:
                 dividend = Decimal(0)
             dividend = dividend + self.__deposit - self.__withdraw
-            perform = Performance.objects.first()
-            if perform is None:
-                unit = self.__current  # 第一次计算
-            else:
-                unit = perf.unit_count
-            nav = self.__current / unit  # 单位净值
-            accumulated = (self.__current - dividend) / unit  # 累计净值
+            unit = dividend + self.__fake
+            nav = (self.__current + self.__fake) / unit  # 单位净值
+            accumulated = self.__current / (unit - self.__fake)  # 累计净值
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
-                'used_margin': self.__margin, 'dividend': dividend,
+                'used_margin': self.__margin, 'dividend': dividend, 'fake': self.__fake,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
+            logger.info(f"动态权益: {self.__current:,.0f} 静态权益: {self.__pre_balance:,.0f} 可用资金: {self.__cash:,.0f} "
+                        f"保证金占用: {self.__margin:,.0f} 虚拟资金: {self.__fake:,.0f} 当日入金: {self.__deposit:,.0f} "
+                        f"当日出金: {self.__withdraw:,.0f} 单位净值: {nav:,.2f} 累计净值: {accumulated:,.2f}")
 
     @RegisterCallback(crontab='0 17 * * *')
     async def collect_quote(self, tasks=None):
