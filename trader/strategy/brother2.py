@@ -57,7 +57,7 @@ class TradeStrategy(BaseModule):
         self.__cash = self.__broker.cash  # 可用资金
         self.__shares = dict()  # { instrument : position }
         self.__cur_account = None
-        self.__margin = 0  # 占用保证金
+        self.__margin = Performance.objects.last().used_margin  # 占用保证金
         self.__withdraw = 0  # 出金
         self.__deposit = 0  # 入金
         self.__activeOrders = dict()  # 未成交委托单
@@ -790,17 +790,25 @@ class TradeStrategy(BaseModule):
             p_code_set = set(self.__inst_ids)
             for code in self.__cur_pos.keys():
                 p_code_set.add(self.__re_extract_code.match(code).group(1))
+            sig_dict = dict()
             for inst in Instrument.objects.all().order_by('exchange', 'product_code'):
                 if create_main_bar:
                     logger.debug(f'生成连续合约: {inst.name}')
                     calc_main_inst(inst, day)
                 if inst.product_code in p_code_set:
                     logger.debug(f'计算交易信号: {inst.name}')
-                    self.calc_signal(inst, day)
+                    sig, margin = self.calc_signal(inst, day)
+                    if sig:
+                        sig_dict[sig] = margin
+            all_margin = sum(sig_dict.values())
+            if (all_margin + self.__margin) / self.__current > 0.85:
+                logger.info(f"！！！风险提示！！！开仓保证金共计: {all_margin:.0f}({all_margin/10000:.1f}万) "
+                            f"账户风险度将达到: {100 * (all_margin + self.__margin) / self.__current:.0f}% "
+                            f"建议追加保证金或减少开仓手数！")
         except Exception as e:
             logger.warning(f'calculate 发生错误: {repr(e)}', exc_info=True)
 
-    def calc_signal(self, inst: Instrument, day: datetime.datetime):
+    def calc_signal(self, inst: Instrument, day: datetime.datetime) -> (Signal, Decimal):
         try:
             break_n = self.__strategy.param_set.get(code='BreakPeriod').int_value
             atr_n = self.__strategy.param_set.get(code='AtrPeriod').int_value
@@ -817,7 +825,7 @@ class TradeStrategy(BaseModule):
             df.loc[:, 'atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
             df.loc[:, 'short_trend'] = df.close
             df.loc[:, 'long_trend'] = df.close
-            # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend
+            # df columns 0:time, 1:open, 2:high, 3:low, 4:close, 5:settlement, 6:atr, 7:short_trend, 8:long_trend
             for idx in range(1, df.shape[0]):
                 df.iloc[idx, 7] = (df.iloc[idx - 1, 7] * (short_n - 1) + df.iloc[idx, 4]) / short_n
                 df.iloc[idx, 8] = (df.iloc[idx - 1, 8] * (long_n - 1) + df.iloc[idx, 4]) / long_n
@@ -843,11 +851,8 @@ class TradeStrategy(BaseModule):
                 else:
                     sell_sig = True
                 self.__strategy.force_opens.remove(inst)
-            signal = None
-            signal_code = None
-            signal_value = None
-            price = None
-            volume = None
+            signal = signal_code = signal_value = price = volume = use_margin = None
+            use_margin_dict = dict()
             if pos:
                 # 多头持仓
                 if pos.direction == DirectionType.values[DirectionType.LONG]:
@@ -917,8 +922,8 @@ class TradeStrategy(BaseModule):
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     use_margin = new_bar.settlement * inst.volume_multiple * inst.margin_rate * volume
-                    if (self.__margin + use_margin) / self.__current > 0.85:
-                        logger.info(f'做多{volume}手{inst},保证金将超过总资金的85%,超出风控额度，放弃。')
+                    if (self.__margin + use_margin) / self.__current > 0.95:
+                        logger.info(f'做多{volume}手{inst},保证金将超过总资金的95%,超出风控额度，放弃。')
                     else:
                         price = self.calc_up_limit(inst, new_bar)
                         signal = SignalType.BUY
@@ -933,8 +938,8 @@ class TradeStrategy(BaseModule):
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     use_margin = new_bar.settlement * inst.volume_multiple * inst.margin_rate * volume
-                    if (self.__margin + use_margin) / self.__current > 0.85:
-                        logger.info(f'做空{volume}手{inst},保证金将超过总资金的85%,超出风控额度，放弃。')
+                    if (self.__margin + use_margin) / self.__current > 0.95:
+                        logger.info(f'做空{volume}手{inst},保证金将超过总资金的95%,超出风控额度，放弃。')
                     else:
                         price = self.calc_down_limit(inst, new_bar)
                         signal = SignalType.SELL_SHORT
@@ -947,11 +952,11 @@ class TradeStrategy(BaseModule):
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
                         'price': price, 'volume': volume, 'trigger_value': signal_value,
                         'priority': PriorityType.Normal, 'processed': False})
-
-                use_margin = price * volume * inst.volume_multiple * inst.margin_rate
                 logger.info(f"新信号: {sig} 预估保证金: {use_margin:.0f}({use_margin/10000:.1f}万)")
+                return signal, use_margin
         except Exception as e:
             logger.warning(f'calc_signal 发生错误: {repr(e)}', exc_info=True)
+        return None, 0
 
     def process_signal(self, signal: Signal):
         try:
