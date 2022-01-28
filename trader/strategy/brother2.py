@@ -914,11 +914,15 @@ class TradeStrategy(BaseModule):
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
                 volume = (self.__current + self.__fake) * risk // risk_each
                 if volume > 0:
-                    signal = SignalType.BUY
-                    signal_value = df.high_line[idx - 1]
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                    price = self.calc_up_limit(inst, new_bar)
+                    use_margin = new_bar.settlement * inst.volume_multiple * inst.margin_rate * volume
+                    if (self.__margin + use_margin) / self.__current > 0.85:
+                        logger.info(f'做多{volume}手{inst},保证金将超过总资金的85%,超出风控额度，放弃。')
+                    else:
+                        price = self.calc_up_limit(inst, new_bar)
+                        signal = SignalType.BUY
+                        signal_value = df.high_line[idx - 1]
                 else:
                     logger.info(f'做多{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
             # 做空
@@ -926,11 +930,15 @@ class TradeStrategy(BaseModule):
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
                 volume = (self.__current + self.__fake) * risk // risk_each
                 if volume > 0:
-                    signal = SignalType.SELL_SHORT
-                    signal_value = df.low_line[idx - 1]
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                    price = self.calc_down_limit(inst, new_bar)
+                    use_margin = new_bar.settlement * inst.volume_multiple * inst.margin_rate * volume
+                    if (self.__margin + use_margin) / self.__current > 0.85:
+                        logger.info(f'做空{volume}手{inst},保证金将超过总资金的85%,超出风控额度，放弃。')
+                    else:
+                        price = self.calc_down_limit(inst, new_bar)
+                        signal = SignalType.SELL_SHORT
+                        signal_value = df.low_line[idx - 1]
                 else:
                     logger.info(f'做空{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
             if signal:
