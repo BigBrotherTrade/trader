@@ -760,8 +760,11 @@ class TradeStrategy(BaseModule):
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
                 'used_margin': self.__margin, 'dividend': dividend, 'fake': self.__fake,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
-            logger.info(f"动态权益: {self.__current:,.0f} 静态权益: {self.__pre_balance:,.0f} 可用资金: {self.__cash:,.0f} "
-                        f"保证金占用: {self.__margin:,.0f} 虚拟资金: {self.__fake:,.0f} 当日入金: {self.__deposit:,.0f} "
+            logger.info(f"动态权益: {self.__current:,.0f}({self.__current/10000:.1f}万) "
+                        f"静态权益: {self.__pre_balance:,.0f}({self.__pre_balance/10000:.1f}万) "
+                        f"可用资金: {self.__cash:,.0f}({self.__cash/10000:.1f}万) "
+                        f"保证金占用: {self.__margin:,.0f}({self.__margin/10000:.1f}万) "
+                        f"虚拟资金: {self.__fake:,.0f}({self.__fake/10000:.1f}万) 当日入金: {self.__deposit:,.0f} "
                         f"当日出金: {self.__withdraw:,.0f} 单位净值: {nav:,.2f} 累计净值: {accumulated:,.2f}")
 
     @RegisterCallback(crontab='0 17 * * *')
