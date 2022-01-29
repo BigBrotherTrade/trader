@@ -142,13 +142,17 @@ class TradeStrategy(BaseModule):
             for _, pos in self.__cur_pos.items():
                 p_code = self.__re_extract_code.match(pos['InstrumentID']).group(1)
                 inst = Instrument.objects.get(product_code=p_code)
-                profit = pos['PositionProfitByTrade']
                 trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=pos['InstrumentID'],
                     direction=DirectionType.values[pos['Direction']], close_time__isnull=True).first()
+                bar = DailyBar.objects.filter(code=trade.code).order_by('-time').first()
+                profit = (bar.close - Decimal(pos['OpenPrice'])) * pos['Volume'] * inst.volume_multiple
+                if pos['Direction'] == DirectionType.values[DirectionType.SHORT]:
+                    profit *= -1
                 if trade:
                     trade.shares = (trade.closed_shares if trade.closed_shares else 0) + pos['Volume']
                     trade.filled_shares = trade.shares
+                    trade.profit = profit
                     trade.save(update_fields=['shares', 'filled_shares', 'profit'])
                 else:
                     Trade.objects.create(

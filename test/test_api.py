@@ -82,3 +82,13 @@ class APITest(asynctest.TestCase):
     async def test_create_main(self):
         inst = Instrument.objects.get(product_code='eb')
         self.assertTrue(create_main(inst))
+
+    @asynctest.skipIf(False, 'no need')
+    async def test_calc_profit(self):
+        for trade in Trade.objects.filter(close_time__isnull=True):
+            bar = DailyBar.objects.filter(code=trade.code).order_by('-time').first()
+            trade.profit = (bar.close - trade.avg_entry_price) * trade.filled_shares * trade.instrument.volume_multiple
+            if trade.direction == DirectionType.values[DirectionType.SHORT]:
+                trade.profit *= -1
+            trade.save(update_fields=['profit'])
+        self.assertTrue(True)
