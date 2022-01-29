@@ -54,7 +54,8 @@ class Address(models.Model):
 class Broker(models.Model):
     name = models.CharField(verbose_name='名称', max_length=64)
     contract_type = models.CharField(verbose_name='市场', max_length=32, choices=ContractType.choices)
-    trade_address = models.ForeignKey(Address, verbose_name='交易前置', on_delete=models.CASCADE, related_name='trade_address')
+    trade_address = models.ForeignKey(Address, verbose_name='交易前置', on_delete=models.CASCADE,
+                                      related_name='trade_address')
     market_address = models.ForeignKey(Address, verbose_name='行情前置', on_delete=models.CASCADE,
                                        related_name='market_address')
     identify = models.CharField(verbose_name='唯一标志', max_length=32)
@@ -64,6 +65,7 @@ class Broker(models.Model):
     cash = models.DecimalField(verbose_name='可用资金', null=True, max_digits=12, decimal_places=2)
     current = models.DecimalField(verbose_name='动态权益', null=True, max_digits=12, decimal_places=2)
     pre_balance = models.DecimalField(verbose_name='静态权益', null=True, max_digits=12, decimal_places=2)
+    margin = models.DecimalField(verbose_name='保证金', null=True, max_digits=12, decimal_places=2)
 
     class Meta:
         verbose_name = '账户'

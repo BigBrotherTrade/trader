@@ -57,7 +57,7 @@ class TradeStrategy(BaseModule):
         self.__cash = self.__broker.cash  # 可用资金
         self.__shares = dict()  # { instrument : position }
         self.__cur_account = None
-        self.__margin = Performance.objects.last().used_margin  # 占用保证金
+        self.__margin = self.__broker.margin  # 占用保证金
         self.__withdraw = 0  # 出金
         self.__deposit = 0  # 入金
         self.__activeOrders = dict()  # 未成交委托单
@@ -112,7 +112,9 @@ class TradeStrategy(BaseModule):
             self.__broker.cash = self.__cash
             self.__broker.current = self.__current
             self.__broker.pre_balance = self.__pre_balance
-            self.__broker.save(update_fields=['cash', 'current', 'pre_balance', 'fake'])
+            self.__broker.fake = self.__fake
+            self.__broker.margin = self.__margin
+            self.__broker.save(update_fields=['cash', 'current', 'pre_balance', 'fake', 'margin'])
             logger.debug(f"更新账户,可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
                          f"动态权益: {self.__current:,.0f} 出入金: {self.__withdraw:,.0f} 虚拟: {self.__fake:,.0f}")
         except Exception as e:
