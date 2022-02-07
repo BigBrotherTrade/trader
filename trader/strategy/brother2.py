@@ -98,9 +98,9 @@ class TradeStrategy(BaseModule):
             self.__withdraw = Decimal(account['Withdraw'])
             self.__deposit = Decimal(account['Deposit'])
             # 虚拟=虚拟(原始)-入金+出金
-            self.__fake = self.__fake - self.__deposit + self.__withdraw
-            if self.__fake < 1:
-                self.__fake = 0
+            fake = self.__fake - self.__deposit + self.__withdraw
+            if fake < 1:
+                fake = 0
             # 静态权益=上日结算+入金金额-出金金额
             self.__pre_balance = Decimal(account['PreBalance']) + self.__deposit - self.__withdraw
             # 动态权益=静态权益+平仓盈亏+持仓盈亏-手续费
@@ -112,11 +112,10 @@ class TradeStrategy(BaseModule):
             self.__broker.cash = self.__cash
             self.__broker.current = self.__current
             self.__broker.pre_balance = self.__pre_balance
-            self.__broker.fake = self.__fake
             self.__broker.margin = self.__margin
-            self.__broker.save(update_fields=['cash', 'current', 'pre_balance', 'fake', 'margin'])
+            self.__broker.save(update_fields=['cash', 'current', 'pre_balance', 'margin'])
             logger.debug(f"更新账户,可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
-                         f"动态权益: {self.__current:,.0f} 出入金: {self.__withdraw:,.0f} 虚拟: {self.__fake:,.0f}")
+                         f"动态权益: {self.__current:,.0f} 出入金: {self.__withdraw:,.0f} 虚拟: {fake:,.0f}")
         except Exception as e:
             logger.warning(f'refresh_account 发生错误: {repr(e)}', exc_info=True)
     
@@ -763,11 +762,17 @@ class TradeStrategy(BaseModule):
             if dividend is None:
                 dividend = Decimal(0)
             dividend = dividend + self.__deposit - self.__withdraw
+            # 虚拟=虚拟(原始)-入金+出金
+            self.__fake = self.__fake - self.__deposit + self.__withdraw
+            if self.__fake < 1:
+                self.__fake = 0
+            self.__broker.fake = self.__fake
+            self.__broker.save(update_fields=['fake'])
             unit = dividend + self.__fake
             nav = (self.__current + self.__fake) / unit  # 单位净值
             accumulated = self.__current / (unit - self.__fake)  # 累计净值
             Performance.objects.update_or_create(broker=self.__broker, day=today.date(), defaults={
-                'used_margin': self.__margin, 'dividend': dividend, 'fake': self.__fake,
+                'used_margin': self.__margin, 'dividend': self.__deposit - self.__withdraw, 'fake': self.__fake,
                 'capital': self.__current, 'unit_count': unit, 'NAV': nav, 'accumulated': accumulated})
             logger.info(f"动态权益: {self.__current:,.0f}({self.__current/10000:.1f}万) "
                         f"静态权益: {self.__pre_balance:,.0f}({self.__pre_balance/10000:.1f}万) "
