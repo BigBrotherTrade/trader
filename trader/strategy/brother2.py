@@ -23,7 +23,7 @@ from decimal import Decimal
 import logging
 from django.db.models import Q, F, Max, Min, Sum
 from django.utils import timezone
-from django.db import connection
+# from django.db import connection
 from talib import ATR
 import ujson as json
 import aioredis
@@ -526,7 +526,7 @@ class TradeStrategy(BaseModule):
                     Q(closed_shares__isnull=True) | Q(closed_shares__lt=F('shares')), shares=F('filled_shares'),
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
                     direction=open_direct).first()
-                print(connection.queries[-1]['sql'])
+                # print(connection.queries[-1]['sql'])
                 print(f'trade={last_trade}')
                 if last_trade:
                     if last_trade.closed_shares and last_trade.avg_exit_price:
