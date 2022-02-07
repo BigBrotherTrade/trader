@@ -957,6 +957,7 @@ class TradeStrategy(BaseModule):
                 else:
                     logger.info(f'做空{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
             if signal:
+                use_margin = use_margin if use_margin else 0
                 sig, _ = Signal.objects.update_or_create(
                     code=signal_code if signal_code else inst.main_code,
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
