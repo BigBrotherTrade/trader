@@ -118,7 +118,7 @@ class TradeStrategy(BaseModule):
                          f"动态权益: {self.__current:,.0f} 出入金: {self.__withdraw:,.0f} 虚拟: {fake:,.0f}")
         except Exception as e:
             logger.warning(f'refresh_account 发生错误: {repr(e)}', exc_info=True)
-    
+
     async def refresh_position(self):
         try:
             logger.debug('更新持仓...')
@@ -164,7 +164,7 @@ class TradeStrategy(BaseModule):
             logger.debug('更新持仓完成!')
         except Exception as e:
             logger.warning(f'refresh_position 发生错误: {repr(e)}', exc_info=True)
-    
+
     async def refresh_instrument(self):
         try:
             logger.debug("更新合约...")
@@ -850,8 +850,8 @@ class TradeStrategy(BaseModule):
             df.loc[:, 'low_line'] = df.close.rolling(window=break_n).min()
             idx = -1
             pos_idx = None
-            buy_sig = df.short_trend[idx] > df.long_trend[idx] and int(df.close[idx]) >= int(df.high_line[idx - 1])
-            sell_sig = df.short_trend[idx] < df.long_trend[idx] and int(df.close[idx]) <= int(df.low_line[idx - 1])
+            buy_sig = df.short_trend[idx] > df.long_trend[idx] and df.close[idx] >= df.high_line[idx - 1]
+            sell_sig = df.short_trend[idx] < df.long_trend[idx] and df.close[idx] <= df.low_line[idx - 1]
             pos = Trade.objects.filter(
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
                 broker=self.__broker, strategy=self.__strategy,
