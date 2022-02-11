@@ -850,8 +850,10 @@ class TradeStrategy(BaseModule):
             df.loc[:, 'low_line'] = df.close.rolling(window=break_n).min()
             idx = -1
             pos_idx = None
-            buy_sig = df.short_trend[idx] > df.long_trend[idx] and df.close[idx] >= df.high_line[idx - 1]
-            sell_sig = df.short_trend[idx] < df.long_trend[idx] and df.close[idx] <= df.low_line[idx - 1]
+            buy_sig = df.short_trend[idx] > df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) >= \
+                price_round(df.high_line[idx - 1], inst.price_tick)
+            sell_sig = df.short_trend[idx] < df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) <= \
+                price_round(df.high_line[idx - 1], inst.price_tick)
             pos = Trade.objects.filter(
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
                 broker=self.__broker, strategy=self.__strategy,
