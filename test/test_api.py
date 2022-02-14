@@ -74,7 +74,7 @@ class APITest(asynctest.TestCase):
         result = await asyncio.gather(*tasks, return_exceptions=True)
         self.assertEqual(result, [True, True, True, True, True])
 
-    @asynctest.skipIf(True, 'no need')
+    @asynctest.skipIf(False, 'no need')
     async def test_load_from_kt(self):
         self.assertTrue(load_kt_data(r'D:\test'))
 
@@ -83,7 +83,7 @@ class APITest(asynctest.TestCase):
         inst = Instrument.objects.get(product_code='eb')
         self.assertTrue(create_main(inst))
 
-    @asynctest.skipIf(False, 'no need')
+    @asynctest.skipIf(True, 'no need')
     async def test_calc_profit(self):
         for trade in Trade.objects.filter(close_time__isnull=True):
             bar = DailyBar.objects.filter(code=trade.code).order_by('-time').first()

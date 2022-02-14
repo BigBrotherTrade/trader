@@ -89,6 +89,7 @@ class TradeStrategy(BaseModule):
                     self.save_order(order)
             await self.refresh_position()
         # self.calculate(timezone.localtime(), create_main_bar=False)
+        # await self.collect_quote()
 
     async def refresh_account(self):
         try:
@@ -853,7 +854,7 @@ class TradeStrategy(BaseModule):
             buy_sig = df.short_trend[idx] > df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) >= \
                 price_round(df.high_line[idx - 1], inst.price_tick)
             sell_sig = df.short_trend[idx] < df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) <= \
-                price_round(df.high_line[idx - 1], inst.price_tick)
+                price_round(df.low_line[idx - 1], inst.price_tick)
             pos = Trade.objects.filter(
                 Q(close_time__isnull=True) | Q(close_time__gt=day),
                 broker=self.__broker, strategy=self.__strategy,

@@ -74,6 +74,10 @@ def price_round(x: Decimal, base: Decimal):
     :param base: Decimal 最小精度
     :return: float 取整结果
     """
+    if not type(x) is Decimal:
+        x = Decimal(x)
+    if not type(base) is Decimal:
+        base = Decimal(base)
     precision = 0
     s = str(round(base, 3) % 1)
     s = s.rstrip('0').rstrip('.') if '.' in s else s
@@ -381,8 +385,9 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
     # 条件2: 不满足条件1但是连续3天成交量最大 = 主力合约
     if check_bar is None:
         check_bars = DailyBar.objects.raw(
-            "SELECT id, max(volume) v FROM panel_dailybar WHERE CODE RLIKE %s GROUP BY time "
-            "ORDER BY time DESC LIMIT 3", [f"^{inst.product_code}[0-9]+"])
+            "SELECT a.* from panel_dailybar a INNER JOIN (SELECT time, max(volume) v FROM panel_dailybar "
+            "WHERE CODE RLIKE %s and time<=%s GROUP BY time ORDER BY time DESC LIMIT 3) b "
+            "WHERE a.time=b.time and a.volume=b.v ORDER BY a.time DESC LIMIT 3", [f"^{inst.product_code}[0-9]+", day])
         check_bar = check_bars[0] if len(set(bar.code for bar in check_bars)) == 1 else None
     # 条件3: 取当前成交量最大的作为主力
     if check_bar is None:
