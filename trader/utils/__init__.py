@@ -56,8 +56,9 @@ dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
 # ts_api = tushare.pro_api(config.get('Tushare', 'token'))
 IGNORE_INST_LIST = config.get('TRADE', 'ignore_inst').split(',')
 INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
-ORDER_REF_PREFIX = '8'
-ORDER_REF_SIGNAL_ID_START = 6
+ORDER_REF_PREFIX = '33'
+ORDER_REF_SIGNAL_ID_START = 2
+ORDER_REF_SIGNAL_ID_END = 9
 
 
 def str_to_number(s):
@@ -93,7 +94,7 @@ def get_next_order_ref(sig: Signal):
     if not hasattr(get_next_order_ref, "order_ref"):
         get_next_order_ref.order_ref = random.randint(0, 999)
     get_next_order_ref.order_ref = 1 if get_next_order_ref.order_ref == 999 else get_next_order_ref.order_ref + 1
-    return f"{ORDER_REF_PREFIX}{get_next_order_ref.order_ref:03}{sig.strategy.id % 100:02}{sig.id:07}"
+    return f"{ORDER_REF_PREFIX}{sig.id:07}{sig.strategy.id % 10}{get_next_order_ref.order_ref:03}"
 
 
 def get_next_id():

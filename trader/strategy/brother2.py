@@ -32,7 +32,7 @@ from trader.utils.func_container import RegisterCallback
 from trader.utils.read_config import config, ctp_errors
 from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, \
     update_from_czce, update_from_cffex, get_contracts_argument, calc_main_inst, str_to_number, get_next_id, \
-    get_next_order_ref, ORDER_REF_PREFIX, ORDER_REF_SIGNAL_ID_START
+    get_next_order_ref, ORDER_REF_PREFIX, ORDER_REF_SIGNAL_ID_START, ORDER_REF_SIGNAL_ID_END
 from panel.models import *
 
 logger = logging.getLogger('CTPApi')
@@ -87,7 +87,7 @@ class TradeStrategy(BaseModule):
                     self.save_order(order)
             await self.refresh_position()
         # self.calculate(timezone.localtime(), create_main_bar=False)
-        # await self.collect_quote()
+        # await self.processing_signal3()
 
     async def refresh_account(self):
         try:
@@ -316,7 +316,8 @@ class TradeStrategy(BaseModule):
 
     async def sell(self, sig: Signal):
         close_flag = ApiStruct.OF_Close
-        pos = Trade.objects.get(open_order__signal=sig)
+        pos = Trade.objects.filter(code=sig.code, shares=sig.volume, close_time__isnull=True,
+                                   direction=DirectionType.values[DirectionType.LONG]).first()
         if pos.open_time.date() == timezone.localtime().date() and pos.instrument.exchange == ExchangeType.SHFE:
             close_flag = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
         rst = await self.ReqOrderInsert(sig, ApiStruct.D_Sell, close_flag)
@@ -328,7 +329,8 @@ class TradeStrategy(BaseModule):
 
     async def buy_cover(self, sig: Signal):
         close_flag = ApiStruct.OF_Close
-        pos = Trade.objects.get(open_order__signal=sig)
+        pos = Trade.objects.filter(code=sig.code, shares=sig.volume, close_time__isnull=True,
+                                   direction=DirectionType.values[DirectionType.SHORT]).first()
         if pos.open_time.date() == timezone.localtime().date() and pos.instrument.exchange == ExchangeType.SHFE:
             close_flag = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
         rst = await self.ReqOrderInsert(sig, ApiStruct.D_Buy, close_flag)
@@ -344,18 +346,19 @@ class TradeStrategy(BaseModule):
             param_dict = dict()
             param_dict['RequestID'] = request_id
             param_dict['OrderRef'] = order_ref
-            param_dict['InstrumentID'] = sig.code,
-            param_dict['VolumeTotalOriginal'] = sig.volume,
-            param_dict['LimitPrice'] = float(sig.price),
-            param_dict['Direction'] = direction,
-            param_dict['CombOffsetFlag'] = offsetflag,
-            param_dict['ContingentCondition'] = ApiStruct.CC_Immediately,  # 立即
+            param_dict['InstrumentID'] = sig.code
+            param_dict['VolumeTotalOriginal'] = sig.volume
+            param_dict['LimitPrice'] = float(sig.price)
+            param_dict['Direction'] = direction
+            param_dict['CombOffsetFlag'] = offsetflag
+            param_dict['ContingentCondition'] = ApiStruct.CC_Immediately  # 立即
             param_dict['TimeCondition'] = ApiStruct.TC_GFD  # 当日有效
             channel_rtn_odr = self.__trade_response_format.format('OnRtnOrder', order_ref)
             channel_rsp_err = self.__trade_response_format.format('OnRspError', request_id)
             channel_rsp_odr = self.__trade_response_format.format('OnRspOrderInsert', 0)
             await sub_client.psubscribe(channel_rtn_odr, channel_rsp_err, channel_rsp_odr)
             task = asyncio.create_task(self.query_reader(sub_client))
+            print(f'param_dict: {param_dict}')
             self.raw_redis.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(param_dict))
             await asyncio.wait_for(task, HANDLER_TIME_OUT)
             await sub_client.punsubscribe()
@@ -429,7 +432,7 @@ class TradeStrategy(BaseModule):
             order_ref: str = channel.split(':')[-1]
             manual_trade = not order_ref.startswith(ORDER_REF_PREFIX)
             if not manual_trade:
-                signal = Signal.objects.get(id=order_ref[ORDER_REF_SIGNAL_ID_START:])
+                signal = Signal.objects.get(id=int(order_ref[ORDER_REF_SIGNAL_ID_START:ORDER_REF_SIGNAL_ID_END]))
             logger.info(f"成交回报: {self.get_trade_string(trade)}")
             inst = Instrument.objects.get(product_code=self.__re_extract_code.match(trade['InstrumentID']).group(1))
             order = Order.objects.filter(
@@ -509,25 +512,28 @@ class TradeStrategy(BaseModule):
 
     @staticmethod
     def save_order(order: dict):
-        if not order['OrderRef'].startswith(ORDER_REF_PREFIX):  # 非本程序生成订单
-            return None, None
-        signal = Signal.objects.get(id=order['OrderRef'][ORDER_REF_SIGNAL_ID_START:])
-        odr, created = Order.objects.update_or_create(
-            code=order['InstrumentID'], order_ref=order['OrderRef'], signal=signal, defaults={
-                'broker': signal.strategy.broker, 'strategy': signal.strategy, 'instrument': signal.instrument,
-                'front': order['FrontID'], 'session': order['SessionID'], 'price': order['LimitPrice'],
-                'volume': order['VolumeTotalOriginal'],
-                'direction': DirectionType.values[order['Direction']],
-                'status': OrderStatus.values[order['OrderStatus']],
-                'offset_flag': CombOffsetFlag.values[order['CombOffsetFlag']],
-                'send_time': timezone.make_aware(
-                    datetime.datetime.strptime(order['InsertDate'] + order['InsertTime'], '%Y%m%d%H:%M:%S')),
-                'update_time': timezone.localtime()})
-        now = timezone.localtime().date()
-        if created and odr.send_time.date() > timezone.localtime().date():  # 夜盘成交时返回的时间是下一个交易日，需要改成今天
-            odr.send_time.replace(year=now.year, month=now.month, day=now.day)
-            odr.save(update_fields=['send_time'])
-        return odr, created
+        try:
+            if not order['OrderRef'].startswith(ORDER_REF_PREFIX):  # 非本程序生成订单
+                return None, None
+            signal = Signal.objects.get(id=int(order['OrderRef'][ORDER_REF_SIGNAL_ID_START:ORDER_REF_SIGNAL_ID_END]))
+            odr, created = Order.objects.update_or_create(
+                code=order['InstrumentID'], order_ref=order['OrderRef'], signal=signal, defaults={
+                    'broker': signal.strategy.broker, 'strategy': signal.strategy, 'instrument': signal.instrument,
+                    'front': order['FrontID'], 'session': order['SessionID'], 'price': order['LimitPrice'],
+                    'volume': order['VolumeTotalOriginal'],
+                    'direction': DirectionType.values[order['Direction']],
+                    'status': OrderStatus.values[order['OrderStatus']],
+                    'offset_flag': CombOffsetFlag.values[order['CombOffsetFlag']],
+                    'send_time': timezone.make_aware(
+                        datetime.datetime.strptime(order['InsertDate'] + order['InsertTime'], '%Y%m%d%H:%M:%S')),
+                    'update_time': timezone.localtime()})
+            now = timezone.localtime().date()
+            if created and odr.send_time.date() > timezone.localtime().date():  # 夜盘成交时返回的时间是下一个交易日，需要改成今天
+                odr.send_time.replace(year=now.year, month=now.month, day=now.day)
+                odr.save(update_fields=['send_time'])
+            return odr, created
+        except Exception as ee:
+            logger.warning(f'save_order 发生错误: {repr(ee)}', exc_info=True)
 
     @staticmethod
     def get_order_string(order: dict) -> str:
