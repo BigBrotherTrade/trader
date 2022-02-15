@@ -820,15 +820,15 @@ class TradeStrategy(BaseModule):
                 # 多头持仓
                 if pos.direction == DirectionType.values[DirectionType.LONG]:
                     first_pos = pos
-                    while hasattr(first_pos, 'open_order') and first_pos.open_order.signal.type == SignalType.ROLL_OPEN:
+                    while hasattr(first_pos, 'open_order') and first_pos.open_order and first_pos.open_order.signal \
+                            and first_pos.open_order.signal.type == SignalType.ROLL_OPEN:
                         last_pos = Trade.objects.filter(
                             close_order__signal__type=SignalType.ROLL_CLOSE, instrument=first_pos.instrument,
                             strategy=first_pos.strategy, shares=first_pos.shares, direction=first_pos.direction,
-                            close_time__year=first_pos.open_time.year, close_time__month=first_pos.open_time.month,
-                            close_time__day=first_pos.open_time.day).first()
+                            close_time__date=first_pos.open_time.date()).first()
                         if last_pos is None:
                             break
-                        logger.debug(f"发现换月前持仓:{last_pos}")
+                        logger.debug(f"发现换月前持仓:{last_pos} 开仓时间: {last_pos.open_time}")
                         first_pos = last_pos
                     hh = float(MainBar.objects.filter(
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
@@ -862,15 +862,15 @@ class TradeStrategy(BaseModule):
                 # 空头持仓
                 else:
                     first_pos = pos
-                    while hasattr(first_pos, 'open_order') and first_pos.open_order.signal.type == SignalType.ROLL_OPEN:
+                    while hasattr(first_pos, 'open_order') and first_pos.open_order and first_pos.open_order.signal \
+                            and first_pos.open_order.signal.type == SignalType.ROLL_OPEN:
                         last_pos = Trade.objects.filter(
                             close_order__signal__type=SignalType.ROLL_CLOSE, instrument=first_pos.instrument,
                             strategy=first_pos.strategy, shares=first_pos.shares, direction=first_pos.direction,
-                            close_time__year=first_pos.open_time.year, close_time__month=first_pos.open_time.month,
-                            close_time__day=first_pos.open_time.day).first()
+                            close_time__date=first_pos.open_time.date()).first()
                         if last_pos is None:
                             break
-                        logger.debug(f"发现换月前持仓:{last_pos}")
+                        logger.debug(f"发现换月前持仓:{last_pos} 开仓时间: {last_pos.open_time}")
                         first_pos = last_pos
                     ll = float(MainBar.objects.filter(
                         exchange=inst.exchange, product_code=pos.instrument.product_code,

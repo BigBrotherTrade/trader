@@ -14,7 +14,6 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 import logging
-import random
 import ujson as json
 from decimal import Decimal
 import datetime
@@ -92,14 +91,14 @@ def price_round(x: Decimal, base: Decimal):
 
 def get_next_order_ref(sig: Signal):
     if not hasattr(get_next_order_ref, "order_ref"):
-        get_next_order_ref.order_ref = random.randint(0, 999)
+        get_next_order_ref.order_ref = 0
     get_next_order_ref.order_ref = 1 if get_next_order_ref.order_ref == 999 else get_next_order_ref.order_ref + 1
     return f"{ORDER_REF_PREFIX}{sig.id:07}{sig.strategy.id % 10}{get_next_order_ref.order_ref:03}"
 
 
 def get_next_id():
     if not hasattr(get_next_id, "request_id"):
-        get_next_id.request_id = random.randint(0, 999)
+        get_next_id.request_id = 0
     get_next_id.request_id = 1 if get_next_id.request_id == 65535 else get_next_id.request_id + 1
     return get_next_id.request_id
 

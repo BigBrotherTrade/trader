@@ -98,7 +98,6 @@ nosetests.xml
 coverage.xml
 *,cover
 .hypothesis/
-
 # Translations
 *.mo
 *.pot
@@ -142,3 +141,4 @@ ENV/
 # Rope project settings
 .ropeproject
 
+/test/test_jq.py
