@@ -14,7 +14,6 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 import asyncio
-import random
 import re
 from collections import defaultdict
 import datetime
@@ -23,16 +22,17 @@ from decimal import Decimal
 import logging
 from django.db.models import Q, F, Max, Min, Sum
 from django.utils import timezone
-# from django.db import connection
 from talib import ATR
 import ujson as json
 import aioredis
 
+import trader.utils.ApiStruct
 from trader.strategy import BaseModule
 from trader.utils.func_container import RegisterCallback
 from trader.utils.read_config import config, ctp_errors
 from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, \
-    update_from_czce, update_from_cffex, get_contracts_argument, calc_main_inst, str_to_number
+    update_from_czce, update_from_cffex, get_contracts_argument, calc_main_inst, str_to_number, get_next_id, \
+    get_next_order_ref, ORDER_REF_PREFIX, ORDER_REF_SIGNAL_ID_START
 from panel.models import *
 
 logger = logging.getLogger('CTPApi')
@@ -46,8 +46,6 @@ class TradeStrategy(BaseModule):
         self.__trade_response_format = config.get('MSG_CHANNEL', 'trade_response_format')
         self.__request_format = config.get('MSG_CHANNEL', 'request_format')
         self.__ignore_inst_list = config.get('TRADE', 'ignore_inst', fallback="WH,bb,JR,RI,RS,LR,PM,im").split(',')
-        self.__request_id = random.randint(0, 65535)
-        self.__order_ref = random.randint(0, 999)
         self.__strategy = Strategy.objects.get(name=name)
         self.__inst_ids = self.__strategy.instruments.all().values_list('product_code', flat=True)
         self.__broker = self.__strategy.broker
@@ -218,16 +216,6 @@ class TradeStrategy(BaseModule):
         except Exception as e:
             logger.warning(f'refresh_instrument 发生错误: {repr(e)}', exc_info=True)
 
-    def next_order_ref(self):
-        self.__order_ref = 1 if self.__order_ref == 999 else self.__order_ref + 1
-        now = datetime.datetime.now()
-        return '{:02}{:02}{:02}{:03}{:03}'.format(
-            now.hour, now.minute, now.second, int(now.microsecond / 1000), self.__order_ref)
-
-    def next_id(self):
-        self.__request_id = 1 if self.__request_id == 65535 else self.__request_id + 1
-        return self.__request_id
-
     def getShares(self, instrument: str):
         # 这个函数只能处理持有单一方向仓位的情况，若同时持有多空的头寸，返回结果不正确
         shares = 0
@@ -242,7 +230,7 @@ class TradeStrategy(BaseModule):
         return self.__shares[inst_id][0]
 
     def async_query(self, query_type: str, **kwargs):
-        request_id = self.next_id()
+        request_id = get_next_id()
         kwargs['RequestID'] = request_id
         self.raw_redis.publish(self.__request_format.format('ReqQry' + query_type), json.dumps(kwargs))
 
@@ -262,7 +250,7 @@ class TradeStrategy(BaseModule):
         channel_rsp_qry, channel_rsp_err = None, None
         try:
             sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
-            request_id = self.next_id()
+            request_id = get_next_id()
             kwargs['RequestID'] = request_id
             channel_rsp_qry = self.__trade_response_format.format('OnRspQry' + query_type, request_id)
             channel_rsp_err = self.__trade_response_format.format('OnRspError', request_id)
@@ -322,81 +310,53 @@ class TradeStrategy(BaseModule):
                 await sub_client.close()
             return None
 
-    async def buy(self, inst: Instrument, limit_price: Decimal, volume: int):
-        rst = await self.ReqOrderInsert(
-            InstrumentID=inst.main_code,
-            VolumeTotalOriginal=volume,
-            LimitPrice=float(limit_price),
-            Direction=ApiStruct.D_Buy,  # 买
-            CombOffsetFlag=ApiStruct.OF_Open,  # 开
-            ContingentCondition=ApiStruct.CC_Immediately,  # 立即
-            TimeCondition=ApiStruct.TC_GFD)  # 当日有效
+    async def buy(self, sig: Signal):
+        rst = await self.ReqOrderInsert(sig, ApiStruct.D_Buy, ApiStruct.OF_Open)
         return rst
 
-    async def sell(self, pos: Trade, limit_price: Decimal, volume: int):
+    async def sell(self, sig: Signal):
         close_flag = ApiStruct.OF_Close
+        pos = Trade.objects.get(open_order__signal=sig)
         if pos.open_time.date() == timezone.localtime().date() and pos.instrument.exchange == ExchangeType.SHFE:
             close_flag = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
-        rst = await self.ReqOrderInsert(
-            InstrumentID=pos.code,
-            VolumeTotalOriginal=volume,
-            LimitPrice=float(limit_price),
-            Direction=ApiStruct.D_Sell,  # 卖
-            CombOffsetFlag=close_flag,  # 平
-            ContingentCondition=ApiStruct.CC_Immediately,  # 立即
-            TimeCondition=ApiStruct.TC_GFD)  # 当日有效
+        rst = await self.ReqOrderInsert(sig, ApiStruct.D_Sell, close_flag)
         return rst
 
-    async def sell_short(self, inst: Instrument, limit_price: Decimal, volume: int):
-        rst = await self.ReqOrderInsert(
-            InstrumentID=inst.main_code,
-            VolumeTotalOriginal=volume,
-            LimitPrice=float(limit_price),
-            Direction=ApiStruct.D_Sell,  # 卖
-            CombOffsetFlag=ApiStruct.OF_Open,  # 开
-            ContingentCondition=ApiStruct.CC_Immediately,  # 立即
-            TimeCondition=ApiStruct.TC_GFD)  # 当日有效
+    async def sell_short(self, sig: Signal):
+        rst = await self.ReqOrderInsert(sig, ApiStruct.D_Sell, ApiStruct.OF_Open)
         return rst
 
-    async def buy_cover(self, pos: Trade, limit_price: Decimal, volume: int):
+    async def buy_cover(self, sig: Signal):
         close_flag = ApiStruct.OF_Close
+        pos = Trade.objects.get(open_order__signal=sig)
         if pos.open_time.date() == timezone.localtime().date() and pos.instrument.exchange == ExchangeType.SHFE:
             close_flag = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
-        rst = await self.ReqOrderInsert(
-            InstrumentID=pos.code,
-            VolumeTotalOriginal=volume,
-            LimitPrice=float(limit_price),
-            Direction=ApiStruct.D_Buy,  # 买
-            CombOffsetFlag=close_flag,  # 平
-            ContingentCondition=ApiStruct.CC_Immediately,  # 立即
-            TimeCondition=ApiStruct.TC_GFD)  # 当日有效
+        rst = await self.ReqOrderInsert(sig, ApiStruct.D_Buy, close_flag)
         return rst
 
-    async def ReqOrderInsert(self, **kwargs):
-        """
-        InstrumentID 合约
-        VolumeTotalOriginal 手数
-        LimitPrice 限价
-        StopPrice 止损价
-        Direction 方向
-        CombOffsetFlag 开,平,平昨
-        ContingentCondition 触发条件
-        TimeCondition 持续时间
-        """
+    async def ReqOrderInsert(self, sig: Signal, direction, offsetflag):
         sub_client = None
         channel_rtn_odr, channel_rsp_err = None, None
         try:
             sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
-            request_id = self.next_id()
-            order_ref = self.next_order_ref()
-            kwargs['RequestID'] = request_id
-            kwargs['OrderRef'] = order_ref
+            request_id = get_next_id()
+            order_ref = get_next_order_ref(sig)
+            param_dict = dict()
+            param_dict['RequestID'] = request_id
+            param_dict['OrderRef'] = order_ref
+            param_dict['InstrumentID'] = sig.code,
+            param_dict['VolumeTotalOriginal'] = sig.volume,
+            param_dict['LimitPrice'] = float(sig.price),
+            param_dict['Direction'] = direction,
+            param_dict['CombOffsetFlag'] = offsetflag,
+            param_dict['ContingentCondition'] = ApiStruct.CC_Immediately,  # 立即
+            param_dict['TimeCondition'] = ApiStruct.TC_GFD  # 当日有效
             channel_rtn_odr = self.__trade_response_format.format('OnRtnOrder', order_ref)
             channel_rsp_err = self.__trade_response_format.format('OnRspError', request_id)
             channel_rsp_odr = self.__trade_response_format.format('OnRspOrderInsert', 0)
             await sub_client.psubscribe(channel_rtn_odr, channel_rsp_err, channel_rsp_odr)
             task = asyncio.create_task(self.query_reader(sub_client))
-            self.raw_redis.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(kwargs))
+            self.raw_redis.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(param_dict))
             await asyncio.wait_for(task, HANDLER_TIME_OUT)
             await sub_client.punsubscribe()
             await sub_client.close()
@@ -418,7 +378,7 @@ class TradeStrategy(BaseModule):
         channel_rsp_odr_act, channel_rsp_err = None, None
         try:
             sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
-            request_id = self.next_id()
+            request_id = get_next_id()
             order['RequestID'] = request_id
             channel_rtn_odr = self.__trade_response_format.format('OnRtnOrder', order['OrderRef'])
             channel_rsp_odr_act = self.__trade_response_format.format('OnRspOrderAction', 0)
@@ -464,10 +424,17 @@ class TradeStrategy(BaseModule):
     async def OnRtnTrade(self, channel, trade: dict):
         try:
             signal = None
-            order_ref = channel.split(':')[-1]
+            new_trade = False
+            trade_completed = False
+            order_ref: str = channel.split(':')[-1]
+            manual_trade = not order_ref.startswith(ORDER_REF_PREFIX)
+            if not manual_trade:
+                signal = Signal.objects.get(id=order_ref[ORDER_REF_SIGNAL_ID_START:])
             logger.info(f"成交回报: {self.get_trade_string(trade)}")
             inst = Instrument.objects.get(product_code=self.__re_extract_code.match(trade['InstrumentID']).group(1))
-            order = Order.objects.filter(order_ref=order_ref, code=trade['InstrumentID']).order_by('-send_time').first()
+            order = Order.objects.filter(
+                order_ref=order_ref, code=trade['InstrumentID']).order_by('-send_time').first() if manual_trade else \
+                Order.objects.filter(signal=signal).first()
             trade_cost = trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * inst.volume_multiple + \
                 trade['Volume'] * inst.fee_volume
             trade_margin = trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
@@ -476,15 +443,12 @@ class TradeStrategy(BaseModule):
                 datetime.datetime.strptime(trade['TradeDate'] + trade['TradeTime'], '%Y%m%d%H:%M:%S'))
             if trade_time.date() > now.date():
                 trade_time.replace(year=now.year, month=now.month, day=now.day)
-            new_trade = False
-            manual_trade = False
-            trade_completed = False
             if trade['OffsetFlag'] == OffsetFlag.Open:  # 开仓
                 last_trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
-                    # open_order=order,
                     open_time__lte=trade_time, close_time__isnull=True,
-                    direction=DirectionType.values[trade['Direction']]).first()
+                    direction=DirectionType.values[trade['Direction']]).first() if manual_trade else \
+                    Trade.objects.filter(open_order=order).first()
                 # print(connection.queries[-1]['sql'])
                 if last_trade is None:
                     new_trade = True
@@ -494,9 +458,6 @@ class TradeStrategy(BaseModule):
                         direction=DirectionType.values[trade['Direction']],
                         open_time=trade_time, shares=order.volume if order else trade['Volume'], cost=trade_cost,
                         filled_shares=trade['Volume'], avg_entry_price=trade['Price'], frozen_margin=trade_margin)
-                else:
-                    if last_trade.shares == last_trade.filled_shares:
-                        manual_trade = True
                 if order is None or order.volume == trade['Volume']:
                     trade_completed = True
                 if (not new_trade and not manual_trade) or (trade_completed and not new_trade and manual_trade):
@@ -509,17 +470,6 @@ class TradeStrategy(BaseModule):
                     last_trade.cost += trade_cost
                     last_trade.frozen_margin += trade_margin
                     last_trade.save()
-                if trade_completed:
-                    if manual_trade:
-                        signal = Signal.objects.filter(
-                            type=SignalType.BUY if trade['Direction'] == DirectionType.LONG else SignalType.SELL_SHORT)
-                    else:
-                        signal = Signal.objects.filter(
-                            Q(type=SignalType.BUY if trade['Direction'] == DirectionType.LONG else
-                                SignalType.SELL_SHORT) | Q(type=SignalType.ROLL_OPEN))
-                    signal = signal.filter(
-                        code=trade['InstrumentID'], trigger_time__gte=self.__last_trading_day, volume=trade['Volume'],
-                        strategy=self.__strategy, instrument=inst, processed=False).first()
             else:  # 平仓
                 open_direct = DirectionType.values[DirectionType.LONG] if \
                     trade['Direction'] == DirectionType.SHORT else DirectionType.values[DirectionType.SHORT]
@@ -538,9 +488,9 @@ class TradeStrategy(BaseModule):
                         last_trade.avg_exit_price = trade['Volume'] * Decimal(trade['Price']) / trade['Volume']
                         last_trade.closed_shares = trade['Volume']
                     last_trade.cost += trade_cost
+                    last_trade.close_order = order
                     if last_trade.closed_shares == last_trade.shares:  # 全部成交
                         trade_completed = True
-                        last_trade.close_order = order
                         last_trade.close_time = timezone.make_aware(datetime.datetime.strptime(
                             trade['TradeDate'] + trade['TradeTime'], '%Y%m%d%H:%M:%S'))
                         if last_trade.direction == DirectionType.values[DirectionType.LONG]:
@@ -549,47 +499,35 @@ class TradeStrategy(BaseModule):
                             profit_point = last_trade.avg_entry_price - last_trade.avg_exit_price
                         last_trade.profit = profit_point * last_trade.shares * inst.volume_multiple
                     last_trade.save(force_update=True)
-                else:
-                    manual_trade = True
-                if trade_completed:
-                    if manual_trade:
-                        signal = Signal.objects.filter(
-                            type=SignalType.BUY_COVER if trade['Direction'] == DirectionType.LONG else SignalType.SELL)
-                    else:
-                        signal = Signal.objects.filter(
-                            Q(type=SignalType.BUY_COVER if trade['Direction'] == DirectionType.LONG else
-                                SignalType.SELL) | Q(type=SignalType.ROLL_CLOSE))
-                    signal = signal.filter(
-                        code=trade['InstrumentID'], trigger_time__gte=self.__last_trading_day, volume=trade['Volume'],
-                        strategy=self.__strategy, instrument=inst, processed=False).first()
-            logger.debug(f"new_trade:{new_trade} manual_trade:{manual_trade} "
-                         f"trade_completed:{trade_completed} order:{order}")
-            logger.debug(f"signal: {signal}")
-            if signal:
+            logger.debug(f"new_trade:{new_trade} manual_trade:{manual_trade} trade_completed:{trade_completed} "
+                         f"order:{order} signal: {signal}")
+            if trade_completed and not manual_trade:
                 signal.processed = True
                 signal.save(update_fields=['processed'])
         except Exception as ee:
             logger.warning(f'OnRtnTrade 发生错误: {repr(ee)}', exc_info=True)
 
-    def save_order(self, order: dict):
-        product_code = self.__re_extract_code.match(order['InstrumentID']).group(1)
-        inst = Instrument.objects.get(product_code=product_code)
-        order_ref = Decimal(order['OrderRef'])
-        if order_ref < 100000:  # 非本程序生成订单
+    @staticmethod
+    def save_order(order: dict):
+        if not order['OrderRef'].startswith(ORDER_REF_PREFIX):  # 非本程序生成订单
             return None, None
-        odr, create = Order.objects.update_or_create(order_ref=order['OrderRef'], code=order['InstrumentID'], defaults={
-            'broker': self.__broker, 'strategy': self.__strategy, 'instrument': inst, 'front': order['FrontID'],
-            'session': order['SessionID'], 'price': order['LimitPrice'], 'volume': order['VolumeTotalOriginal'],
-            'direction': DirectionType.values[order['Direction']], 'status': OrderStatus.values[order['OrderStatus']],
-            'offset_flag': CombOffsetFlag.values[order['CombOffsetFlag']],
-            'send_time': timezone.make_aware(
-                datetime.datetime.strptime(order['InsertDate'] + order['InsertTime'], '%Y%m%d%H:%M:%S')),
-            'update_time': timezone.localtime()})
+        signal = Signal.objects.get(id=order['OrderRef'][ORDER_REF_SIGNAL_ID_START:])
+        odr, created = Order.objects.update_or_create(
+            code=order['InstrumentID'], order_ref=order['OrderRef'], signal=signal, defaults={
+                'broker': signal.strategy.broker, 'strategy': signal.strategy, 'instrument': signal.instrument,
+                'front': order['FrontID'], 'session': order['SessionID'], 'price': order['LimitPrice'],
+                'volume': order['VolumeTotalOriginal'],
+                'direction': DirectionType.values[order['Direction']],
+                'status': OrderStatus.values[order['OrderStatus']],
+                'offset_flag': CombOffsetFlag.values[order['CombOffsetFlag']],
+                'send_time': timezone.make_aware(
+                    datetime.datetime.strptime(order['InsertDate'] + order['InsertTime'], '%Y%m%d%H:%M:%S')),
+                'update_time': timezone.localtime()})
         now = timezone.localtime().date()
-        if create and odr.send_time.date() > timezone.localtime().date():
+        if created and odr.send_time.date() > timezone.localtime().date():  # 夜盘成交时返回的时间是下一个交易日，需要改成今天
             odr.send_time.replace(year=now.year, month=now.month, day=now.day)
             odr.save(update_fields=['send_time'])
-        return odr, create
+        return odr, created
 
     @staticmethod
     def get_order_string(order: dict) -> str:
@@ -612,6 +550,9 @@ class TradeStrategy(BaseModule):
             if order["OrderSysID"]:
                 logger.debug(f"订单回报: {self.get_order_string(order)}")
             order_obj, _ = self.save_order(order)
+            if not order_obj:
+                return
+            signal = order_obj.signal
             inst = Instrument.objects.get(product_code=self.__re_extract_code.match(order['InstrumentID']).group(1))
             # 处理由于委托价格超出交易所涨跌停板而被撤单的报单，将委托价格下调50%，重新报单
             if order['OrderStatus'] == OrderStatus.Canceled and \
@@ -628,7 +569,7 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 开多{volume}手 重新报单...")
-                        self.io_loop.create_task(self.buy(inst, price, volume))
+                        self.io_loop.create_task(self.buy(signal))
                     else:
                         delta = (last_bar.settlement - price) * Decimal(0.5)
                         price = price_round(last_bar.settlement - delta, inst.price_tick)
@@ -636,11 +577,8 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 开空{volume}手 重新报单...")
-                        self.io_loop.create_task(self.sell_short(inst, price, volume))
+                        self.io_loop.create_task(self.sell_short(signal))
                 else:
-                    pos = Trade.objects.filter(
-                        close_time__isnull=True, code=order['InstrumentID'], broker=self.__broker,
-                        strategy=self.__strategy, instrument=inst, shares__gt=0).first()
                     if order['Direction'] == DirectionType.LONG:
                         delta = (price - last_bar.settlement) * Decimal(0.5)
                         price = price_round(last_bar.settlement + delta, inst.price_tick)
@@ -648,7 +586,7 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 买平{volume}手 重新报单...")
-                        self.io_loop.create_task(self.buy_cover(pos, price, volume))
+                        self.io_loop.create_task(self.buy_cover(signal))
                     else:
                         delta = (last_bar.settlement - price) * Decimal(0.5)
                         price = price_round(last_bar.settlement - delta, inst.price_tick)
@@ -656,7 +594,7 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 卖平{volume}手 重新报单...")
-                        self.io_loop.create_task(self.sell(pos, price, volume))
+                        self.io_loop.create_task(self.sell(signal))
         except Exception as ee:
             logger.warning(f'OnRtnOrder 发生错误: {repr(ee)}', exc_info=True)
 
@@ -863,7 +801,7 @@ class TradeStrategy(BaseModule):
             if pos:
                 pos_idx = df.index.get_loc(
                     pos.open_time.astimezone(pytz.FixedOffset(480)).date().isoformat())
-                roll_over = pos.code != inst.main_code
+                roll_over = pos.code != inst.main_code and pos.code < inst.main_code
             elif self.__strategy.force_opens.filter(id=inst.id).exists() and not buy_sig and not sell_sig:
                 logger.info(f'强制开仓: {inst}')
                 if df.short_trend[idx] > df.long_trend[idx]:
@@ -875,9 +813,20 @@ class TradeStrategy(BaseModule):
             if pos:
                 # 多头持仓
                 if pos.direction == DirectionType.values[DirectionType.LONG]:
+                    first_pos = pos
+                    while hasattr(first_pos, 'open_order') and first_pos.open_order.signal.type == SignalType.ROLL_OPEN:
+                        last_pos = Trade.objects.filter(
+                            close_order__signal__type=SignalType.ROLL_CLOSE, instrument=first_pos.instrument,
+                            strategy=first_pos.strategy, shares=first_pos.shares, direction=first_pos.direction,
+                            close_time__year=first_pos.open_time.year, close_time__month=first_pos.open_time.month,
+                            close_time__day=first_pos.open_time.day).first()
+                        if last_pos is None:
+                            break
+                        logger.debug(f"发现换月前持仓:{last_pos}")
+                        first_pos = last_pos
                     hh = float(MainBar.objects.filter(
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
-                        time__gte=pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
+                        time__gte=first_pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
                     # 多头止损
                     if df.close[idx] <= hh - df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.SELL
@@ -906,9 +855,20 @@ class TradeStrategy(BaseModule):
                                 'priority': PriorityType.Normal, 'processed': False})
                 # 空头持仓
                 else:
+                    first_pos = pos
+                    while hasattr(first_pos, 'open_order') and first_pos.open_order.signal.type == SignalType.ROLL_OPEN:
+                        last_pos = Trade.objects.filter(
+                            close_order__signal__type=SignalType.ROLL_CLOSE, instrument=first_pos.instrument,
+                            strategy=first_pos.strategy, shares=first_pos.shares, direction=first_pos.direction,
+                            close_time__year=first_pos.open_time.year, close_time__month=first_pos.open_time.month,
+                            close_time__day=first_pos.open_time.day).first()
+                        if last_pos is None:
+                            break
+                        logger.debug(f"发现换月前持仓:{last_pos}")
+                        first_pos = last_pos
                     ll = float(MainBar.objects.filter(
                         exchange=inst.exchange, product_code=pos.instrument.product_code,
-                        time__gte=pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
+                        time__gte=first_pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
                     # 空头止损
                     if df.close[idx] >= ll + df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.BUY_COVER
@@ -974,66 +934,57 @@ class TradeStrategy(BaseModule):
 
     def process_signal(self, signal: Signal):
         try:
-            price = signal.price
-            inst = signal.instrument
             if signal.type == SignalType.BUY:
-                logger.info(f'{inst} 开多{signal.volume}手 价格: {price}')
-                self.io_loop.create_task(self.buy(inst, price, signal.volume))
+                logger.info(f'{signal.instrument} 开多{signal.volume}手 价格: {signal.price}')
+                self.io_loop.create_task(self.buy(signal))
             elif signal.type == SignalType.SELL_SHORT:
-                logger.info(f'{inst} 开空{signal.volume}手 价格: {price}')
-                self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
+                logger.info(f'{signal.instrument} 开空{signal.volume}手 价格: {signal.price}')
+                self.io_loop.create_task(self.sell_short(signal))
             elif signal.type == SignalType.BUY_COVER:
-                pos = Trade.objects.filter(
-                    broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
-                    close_time__isnull=True, direction=DirectionType.values[DirectionType.SHORT]).first()
-                logger.info(f'{pos.instrument} 平空{signal.volume}手 价格: {price}')
-                self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
+                logger.info(f'{signal.instrument} 平空{signal.volume}手 价格: {signal.price}')
+                self.io_loop.create_task(self.buy_cover(signal))
             elif signal.type == SignalType.SELL:
-                pos = Trade.objects.filter(
-                    broker=self.__broker, strategy=self.__strategy, code=signal.code, instrument=inst, shares__gt=0,
-                    close_time__isnull=True, direction=DirectionType.values[DirectionType.LONG]).first()
-                logger.info(f'{pos.instrument} 平多{signal.volume}手 价格: {price}')
-                self.io_loop.create_task(self.sell(pos, price, signal.volume))
+                logger.info(f'{signal.instrument} 平多{signal.volume}手 价格: {signal.price}')
+                self.io_loop.create_task(self.sell(signal))
             elif signal.type == SignalType.ROLL_CLOSE:
-                pos = Trade.objects.filter(
-                    broker=self.__broker, strategy=self.__strategy,
-                    code=signal.code, close_time__isnull=True, instrument=inst, shares__gt=0).first()
+                pos = Trade.objects.get(open_order__signal=signal)
                 if pos.direction == DirectionType.values[DirectionType.LONG]:
-                    logger.info(f'{pos.code}->{inst.main_code} 多头换月平旧{signal.volume}手 价格: {price}')
-                    self.io_loop.create_task(self.sell(pos, price, signal.volume))
+                    logger.info(f'{pos.code}->{signal.instrument.main_code} 多头换月平旧{signal.volume}手 价格: {signal.price}')
+                    self.io_loop.create_task(self.sell(signal))
                 else:
-                    logger.info(f'{pos.code}->{inst.main_code} 空头换月平旧{signal.volume}手 价格: {price}')
-                    self.io_loop.create_task(self.buy_cover(pos, price, signal.volume))
+                    logger.info(f'{pos.code}->{signal.instrument.main_code} 空头换月平旧{signal.volume}手 价格: {signal.price}')
+                    self.io_loop.create_task(self.buy_cover(signal))
             elif signal.type == SignalType.ROLL_OPEN:
                 pos = Trade.objects.filter(
                     Q(close_time__isnull=True) | Q(close_time__startswith=datetime.date.today()),
                     broker=self.__broker, strategy=self.__strategy,
-                    shares=signal.volume, code=inst.last_main, instrument=inst, shares__gt=0).first()
+                    shares=signal.volume, code=signal.instrument.last_main, instrument=signal.instrument,
+                    shares__gt=0).first()
                 if pos.direction == DirectionType.values[DirectionType.LONG]:
-                    logger.info(f'{pos.code}->{inst.main_code} 多头换月开新{signal.volume}手 价格: {price}')
-                    self.io_loop.create_task(self.buy(inst, price, signal.volume))
+                    logger.info(f'{pos.code}->{signal.instrument.main_code} 多头换月开新{signal.volume}手 价格: {signal.price}')
+                    self.io_loop.create_task(self.buy(signal))
                 else:
-                    logger.info(f'{pos.code}->{inst.main_code} 空头换月开新{signal.volume}手 价格: {price}')
-                    self.io_loop.create_task(self.sell_short(inst, price, signal.volume))
+                    logger.info(f'{pos.code}->{signal.instrument.main_code} 空头换月开新{signal.volume}手 价格: {signal.price}')
+                    self.io_loop.create_task(self.sell_short(signal))
         except Exception as e:
             logger.warning(f'process_signal 发生错误: {repr(e)}', exc_info=True)
 
-    async def force_close_all(self) -> bool:
-        try:
-            logger.info('强制平仓..')
-            for trade in Trade.objects.filter(close_time__isnull=True).all():
-                shares = trade.filled_shares
-                if trade.closed_shares:
-                    shares -= trade.closed_shares
-                bar = DailyBar.objects.filter(code=trade.code).order_by('-time').first()
-                if trade.direction == DirectionType.values[DirectionType.LONG]:
-                    await self.sell(trade, self.calc_up_limit(trade.instrument, bar), shares)
-                else:
-                    await self.buy_cover(trade, self.calc_down_limit(trade.instrument, bar), shares)
-        except Exception as e:
-            logger.warning(f'force_close_all 发生错误: {repr(e)}', exc_info=True)
-            return False
-        return True
+    # async def force_close_all(self) -> bool:
+    #     try:
+    #         logger.info('强制平仓..')
+    #         for trade in Trade.objects.filter(close_time__isnull=True).all():
+    #             shares = trade.filled_shares
+    #             if trade.closed_shares:
+    #                 shares -= trade.closed_shares
+    #             bar = DailyBar.objects.filter(code=trade.code).order_by('-time').first()
+    #             if trade.direction == DirectionType.values[DirectionType.LONG]:
+    #                 await self.sell(trade, self.calc_up_limit(trade.instrument, bar), shares)
+    #             else:
+    #                 await self.buy_cover(trade, self.calc_down_limit(trade.instrument, bar), shares)
+    #     except Exception as e:
+    #         logger.warning(f'force_close_all 发生错误: {repr(e)}', exc_info=True)
+    #         return False
+    #     return True
 
     def calc_up_limit(self, inst: Instrument, bar: DailyBar):
         settlement = bar.settlement

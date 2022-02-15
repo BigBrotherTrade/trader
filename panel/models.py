@@ -141,7 +141,6 @@ class Instrument(models.Model):
     section = models.CharField('分类', max_length=48, null=True, blank=True, choices=SectionType.choices)
     name = models.CharField('名称', max_length=32, null=True, blank=True)
     product_code = models.CharField('代码', max_length=16, unique=True)
-    sina_code = models.CharField('新浪代码', max_length=16, null=True, blank=True)
     all_inst = models.CharField('品种列表', max_length=256, null=True, blank=True)
     main_code = models.CharField('主力合约', max_length=16, null=True, blank=True)
     last_main = models.CharField('上个主力', max_length=16, null=True, blank=True)
@@ -242,6 +241,7 @@ class Order(models.Model):
     status = models.CharField('状态', max_length=16, choices=OrderStatus.choices)
     send_time = models.DateTimeField('发送时间')
     update_time = models.DateTimeField('更新时间')
+    signal = models.OneToOneField(Signal, verbose_name='信号', on_delete=models.SET_NULL, null=True, blank=True)
 
     class Meta:
         verbose_name = '报单'
@@ -255,10 +255,10 @@ class Trade(models.Model):
     broker = models.ForeignKey(Broker, verbose_name='账户', on_delete=models.CASCADE)
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.SET_NULL, null=True, blank=True)
     instrument = models.ForeignKey(Instrument, verbose_name='品种', on_delete=models.CASCADE)
-    open_order = models.ForeignKey(Order, verbose_name='开仓报单', on_delete=models.CASCADE,
-                                   related_name='open_order', null=True, blank=True)
-    close_order = models.ForeignKey(Order, verbose_name='平仓报单', on_delete=models.CASCADE,
-                                    related_name='close_order', null=True, blank=True)
+    open_order = models.OneToOneField(Order, verbose_name='开仓报单', on_delete=models.SET_NULL,
+                                      related_name='open_order', null=True, blank=True)
+    close_order = models.OneToOneField(Order, verbose_name='平仓报单', on_delete=models.SET_NULL,
+                                       related_name='close_order', null=True, blank=True)
     code = models.CharField('合约代码', max_length=16, null=True, blank=True)
     direction = models.CharField('方向', max_length=8, choices=DirectionType.choices)
     open_time = models.DateTimeField('开仓日期')

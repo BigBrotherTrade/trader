@@ -14,7 +14,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 import logging
-
+import random
 import ujson as json
 from decimal import Decimal
 import datetime
@@ -56,6 +56,8 @@ dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
 # ts_api = tushare.pro_api(config.get('Tushare', 'token'))
 IGNORE_INST_LIST = config.get('TRADE', 'ignore_inst').split(',')
 INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
+ORDER_REF_PREFIX = '8'
+ORDER_REF_SIGNAL_ID_START = 6
 
 
 def str_to_number(s):
@@ -85,6 +87,20 @@ def price_round(x: Decimal, base: Decimal):
     if p2:
         precision = len(p2[0])
     return round(base * round(x / base), precision)
+
+
+def get_next_order_ref(sig: Signal):
+    if not hasattr(get_next_order_ref, "order_ref"):
+        get_next_order_ref.order_ref = random.randint(0, 999)
+    get_next_order_ref.order_ref = 1 if get_next_order_ref.order_ref == 999 else get_next_order_ref.order_ref + 1
+    return f"{ORDER_REF_PREFIX}{get_next_order_ref.order_ref:03}{sig.strategy.id % 100:02}{sig.id:07}"
+
+
+def get_next_id():
+    if not hasattr(get_next_id, "request_id"):
+        get_next_id.request_id = random.randint(0, 999)
+    get_next_id.request_id = 1 if get_next_id.request_id == 65535 else get_next_id.request_id + 1
+    return get_next_id.request_id
 
 
 async def is_trading_day(day: datetime.datetime):
