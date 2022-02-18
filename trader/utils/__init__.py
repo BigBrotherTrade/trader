@@ -29,9 +29,7 @@ import pytz
 import aiohttp
 from django.db.models import Q, F, Max, Min
 from django.utils import timezone
-import demjson
 import redis
-import quandl
 from talib import ATR
 from tqdm import tqdm
 # import tushare
@@ -47,7 +45,6 @@ max_conn_dce = asyncio.Semaphore(5)
 max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 max_conn_sina = asyncio.Semaphore(15)
-quandl.ApiConfig.api_key = config.get('QuantDL', 'api_key')
 cffex_ip = 'www.cffex.com.cn'    # www.cffex.com.cn
 shfe_ip = 'www.shfe.com.cn'      # www.shfe.com.cn
 czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
@@ -92,8 +89,8 @@ def price_round(x: Decimal, base: Decimal):
 def get_next_order_ref(sig: Signal):
     if not hasattr(get_next_order_ref, "order_ref"):
         get_next_order_ref.order_ref = 0
-    get_next_order_ref.order_ref = 1 if get_next_order_ref.order_ref == 999 else get_next_order_ref.order_ref + 1
-    return f"{ORDER_REF_PREFIX}{sig.id:07}{sig.strategy.id % 10}{get_next_order_ref.order_ref:03}"
+    get_next_order_ref.order_ref = 1 if get_next_order_ref.order_ref == 99 else get_next_order_ref.order_ref + 1
+    return f"{ORDER_REF_PREFIX}{sig.id:07}{sig.strategy.id % 10}{get_next_order_ref.order_ref:02}"
 
 
 def get_next_id():
@@ -332,35 +329,6 @@ async def update_from_cffex(day: datetime.datetime) -> bool:
         return False
 
 
-async def update_from_sina(day: datetime.datetime, inst: Instrument):
-    try:
-        async with aiohttp.ClientSession() as session:
-            await max_conn_sina.acquire()
-            async with session.get(f'http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php'
-                                   '/Market_Center.getHQFuturesData?page=1&num=20&sort=position&asc=0&'
-                                   'node={inst.sina_code}&base=futures') as response:
-                print('获取', inst)
-                rst = await response.text()
-                max_conn_sina.release()
-                for inst_data in demjson.decode(rst):
-                    if '连续' in inst_data['name']:
-                        continue
-                    DailyBar.objects.update_or_create(
-                        code=inst_data['symbol'],
-                        exchange=inst.exchange, time=day, defaults={
-                            'expire_date': get_expire_date(inst_data['symbol'], day),
-                            'open': inst_data['open'] if inst_data['open'] != '0' else inst_data['close'],
-                            'high': inst_data['high'] if inst_data['high'] != '0' else inst_data['close'],
-                            'low': inst_data['low'] if inst_data['low'] != '0' else inst_data['close'],
-                            'close': inst_data['close'],
-                            'settlement': inst_data['settlement'] if inst_data['settlement'] != '0' else
-                            inst_data['prevsettlement'],
-                            'volume': inst_data['volume'],
-                            'open_interest': inst_data['position']})
-    except Exception as e:
-        logger.warning(f'update_from_sina failed: {repr(e)}', exc_info=True)
-
-
 def store_main_bar(inst: Instrument, bar: DailyBar):
     MainBar.objects.update_or_create(
         exchange=inst.exchange, product_code=inst.product_code, time=bar.time, defaults={
@@ -467,52 +435,6 @@ def is_auction_time(inst: Instrument, status: dict):
         if not inst.night_trade and now.hour == 8:
             return True
     return False
-
-
-def fetch_from_quandl(inst: Instrument):
-    market = inst.exchange
-    if inst.exchange == ExchangeType.CZCE:
-        market = 'ZCE'
-    prefix = '{}/{}'.format(market, inst.product_code.upper())
-    for year in range(2010, 2017 + 1):
-        print('year', year)
-        for month, month_code in MONTH_CODE.items():
-            quandl_code = prefix + month_code + str(year)
-            print('month', month)
-            rst = None
-            try:
-                rst = quandl.get(quandl_code)
-            except quandl.QuandlError:
-                pass
-            if rst is None:
-                continue
-            rst.rename(columns={'O.I.': 'OI', 'Open Interest': 'OI', 'Prev. Day Open Interest': 'OI',
-                                'Pre Settle': 'PreSettle'},
-                       inplace=True)
-            rst.Settle.fillna(rst.PreSettle, inplace=True)
-            rst.Close.fillna(rst.Settle, inplace=True)
-            rst.Open.fillna(rst.Close, inplace=True)
-            rst.High.fillna(rst.Close, inplace=True)
-            rst.Low.fillna(rst.Close, inplace=True)
-            rst.OI.fillna(Decimal(0), inplace=True)
-            rst.Volume.fillna(0, inplace=True)
-            if inst.exchange == ExchangeType.CZCE:
-                code = '{}{}{:02}'.format(inst.product_code, year % 10, month)
-            else:
-                code = '{}{}{:02}'.format(inst.product_code, year % 100, month)
-            DailyBar.objects.bulk_create(
-                DailyBar(
-                    exchange=inst.exchange, code=code, time=row.Index.date(),
-                    expire_date=int('{}{:02}'.format(year % 100, month)),
-                    open=row.Open, high=row.High, low=row.Low, close=row.Close,
-                    settlement=row.Settle, volume=row.Volume, open_interest=row.OI)
-                for row in rst.itertuples())
-
-
-def fetch_from_quandl_all():
-    for inst in Instrument.objects.all():
-        print('process', inst)
-        fetch_from_quandl(inst)
 
 
 def calc_sma(price, period):

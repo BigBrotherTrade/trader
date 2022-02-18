@@ -1,12 +1,9 @@
-demjson
 aiohttp[speedups]
 aioredis[hiredis]
 redis
 ujson
 appdirs
 django
-pytz
-tqdm
 beautifulsoup4
 lxml
 requests
@@ -14,5 +11,10 @@ numpy
 pandas
 TA-Lib
 croniter
-quandl
 asynctest
+django-redis
+django-choices
+mysqlclient
+tqdm
+pytz
+tzdata
