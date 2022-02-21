@@ -83,7 +83,7 @@ class TradeStrategy(BaseModule):
                 else:
                     self.save_order(order)
             await self.refresh_position()
-        # self.calculate(timezone.localtime(), create_main_bar=False)
+        # self.calculate(timezone.localtime(), create_main_bar=True)
         # await self.processing_signal3()
 
     async def refresh_account(self):
@@ -782,21 +782,21 @@ class TradeStrategy(BaseModule):
             short_n = self.__strategy.param_set.get(code='ShortPeriod').int_value
             stop_n = self.__strategy.param_set.get(code='StopLoss').int_value
             risk = self.__strategy.param_set.get(code='Risk').float_value
+            # 只读取最近400条记录，减少运算量
             df = to_df(MainBar.objects.filter(
-                time__lte=day.date(),
-                exchange=inst.exchange, product_code=inst.product_code).order_by('-time').values_list(
-                'time', 'open', 'high', 'low', 'close', 'settlement')[:400])  # 只读取最近400条记录，减少运算量
+                time__lte=day.date(), exchange=inst.exchange,
+                product_code=inst.product_code).order_by('-time').values_list(
+                'time', 'open', 'high', 'low', 'close')[:400], index_col='time', parse_dates=['time'])
             df = df.iloc[::-1]  # 日期升序排列
-            df.index = pd.DatetimeIndex(df.time)
-            df.loc[:, 'atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
-            df.loc[:, 'short_trend'] = df.close
-            df.loc[:, 'long_trend'] = df.close
-            # df columns 0:time, 1:open, 2:high, 3:low, 4:close, 5:settlement, 6:atr, 7:short_trend, 8:long_trend
+            df.atr = ATR(df.high, df.low, df.close, timeperiod=atr_n)
+            df.short_trend = df.close
+            df.long_trend = df.close
+            # df columns 0:open, 1:high, 2:low, 3:close, 4:atr, 5:short_trend, 6:long_trend
             for idx in range(1, df.shape[0]):
-                df.iloc[idx, 7] = (df.iloc[idx - 1, 7] * (short_n - 1) + df.iloc[idx, 4]) / short_n
-                df.iloc[idx, 8] = (df.iloc[idx - 1, 8] * (long_n - 1) + df.iloc[idx, 4]) / long_n
-            df.loc[:, 'high_line'] = df.close.rolling(window=break_n).max()
-            df.loc[:, 'low_line'] = df.close.rolling(window=break_n).min()
+                df.short_trend[idx] = (df.short_trend[idx-1] * (short_n - 1) + df.close[idx]) / short_n
+                df.long_trend[idx] = (df.long_trend[idx-1] * (long_n - 1) + df.close[idx]) / long_n
+            df.high_line = df.close.rolling(window=break_n).max()
+            df.low_line = df.close.rolling(window=break_n).min()
             idx = -1
             pos_idx = None
             buy_sig = df.short_trend[idx] > df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) >= \
@@ -905,7 +905,7 @@ class TradeStrategy(BaseModule):
             # 做多
             elif buy_sig:
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
-                volume = (self.__current + self.__fake) * risk // risk_each
+                volume = round((self.__current + self.__fake) * risk / risk_each)
                 if volume > 0:
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
@@ -918,7 +918,7 @@ class TradeStrategy(BaseModule):
             # 做空
             elif sell_sig:
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
-                volume = (self.__current + self.__fake) * risk // risk_each
+                volume = round((self.__current + self.__fake) * risk / risk_each)
                 if volume > 0:
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()

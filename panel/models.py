@@ -22,9 +22,11 @@ from django.core.exceptions import EmptyResultSet
 from .const import *
 
 
-def to_df(queryset):
+def to_df(queryset, index_col=None, parse_dates=None):
     """
     :param queryset: django.db.models.query.QuerySet
+    :param index_col: str or list of str, optional, default: None
+    :param parse_dates: list or dict, default: None
     :return: pandas.core.frame.DataFrame
     """
     try:
@@ -34,7 +36,7 @@ def to_df(queryset):
         # query which will certainly be empty
         # e.g. Book.objects.filter(author__in=[])
         return pd.DataFrame()
-    return read_sql_query(query, connection, params=params)
+    return read_sql_query(query, connection, params=params, index_col=index_col, parse_dates=parse_dates)
 
 
 class Address(models.Model):
