@@ -448,7 +448,7 @@ def calc_corr(day: datetime.datetime):
             'product_code', flat=True):
         price_dict[code] = to_df(MainBar.objects.filter(
             time__gte=begin_day.date(),
-            product_code=code).order_by('time').values_list('time', 'close'))
+            product_code=code).order_by('time').values_list('time', 'close'), index_col='time', parse_dates=['time'])
         price_dict[code].index = pd.DatetimeIndex(price_dict[code].time)
         price_dict[code]['price'] = price_dict[code].close.pct_change()
     return pd.DataFrame({k: v.price for k, v in price_dict.items()}).corr()
@@ -485,7 +485,7 @@ def calc_history_signal(inst: Instrument, day: datetime.datetime, strategy: Stra
     df = to_df(MainBar.objects.filter(
         time__lte=day.date(),
         exchange=inst.exchange, product_code=inst.product_code).order_by('time').values_list(
-        'time', 'open', 'high', 'low', 'close', 'settlement'))
+        'time', 'open', 'high', 'low', 'close', 'settlement'), index_col='time', parse_dates=['time'])
     df.index = pd.DatetimeIndex(df.time, tz=pytz.FixedOffset(480))
     df['atr'] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
     # df columns: 0:time,1:open,2:high,3:low,4:close,5:settlement,6:atr,7:short_trend,8:long_trend
