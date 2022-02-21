@@ -140,7 +140,7 @@ class TradeStrategy(BaseModule):
                 trade = Trade.objects.filter(
                     broker=self.__broker, strategy=self.__strategy, instrument=inst, code=pos['InstrumentID'],
                     direction=DirectionType.values[pos['Direction']], close_time__isnull=True).first()
-                bar = DailyBar.objects.filter(code=trade.code).order_by('-time').first()
+                bar = DailyBar.objects.filter(code=pos['InstrumentID']).order_by('-time').first()
                 profit = (bar.close - Decimal(pos['OpenPrice'])) * pos['Volume'] * inst.volume_multiple
                 if pos['Direction'] == DirectionType.values[DirectionType.SHORT]:
                     profit *= -1
