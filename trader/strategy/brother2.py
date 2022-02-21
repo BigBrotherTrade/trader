@@ -328,9 +328,10 @@ class TradeStrategy(BaseModule):
                 case SignalType.BUY_COVER | SignalType.SELL:
                     param_dict['Direction'] = ApiStruct.D_Buy if sig.type == SignalType.BUY_COVER else ApiStruct.D_Sell
                     param_dict['CombOffsetFlag'] = ApiStruct.OF_Close
-                    pos = Trade.objects.filter(broker=self.__broker, strategy=self.__strategy, code=sig.code,
-                                               shares=sig.volume, close_time__isnull=True,
-                                               direction=DirectionType.values[DirectionType.SHORT]).first()
+                    pos = Trade.objects.filter(
+                        broker=self.__broker, strategy=self.__strategy, code=sig.code, shares=sig.volume,
+                        close_time__isnull=True, direction=DirectionType.values[DirectionType.SHORT] if
+                        sig.type == SignalType.SELL_SHORT else DirectionType.values[DirectionType.LONG]).first()
                     if pos.open_time.astimezone().date() == timezone.localtime().date() \
                             and pos.instrument.exchange == ExchangeType.SHFE:
                         param_dict['CombOffsetFlag'] = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
@@ -579,6 +580,7 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 开多{volume}手 重新报单...")
+                        signal.price = price
                         self.io_loop.create_task(self.ReqOrderInsert(signal))
                     else:
                         delta = (last_bar.settlement - price) * Decimal(0.5)
@@ -587,6 +589,7 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 开空{volume}手 重新报单...")
+                        signal.price = price
                         self.io_loop.create_task(self.ReqOrderInsert(signal))
                 else:
                     if order['Direction'] == DirectionType.LONG:
@@ -596,6 +599,7 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 买平{volume}手 重新报单...")
+                        signal.price = price
                         self.io_loop.create_task(self.ReqOrderInsert(signal))
                     else:
                         delta = (last_bar.settlement - price) * Decimal(0.5)
@@ -604,6 +608,7 @@ class TradeStrategy(BaseModule):
                             logger.warning(f"{inst} 新价格: {price} 过低难以成交，放弃报单!")
                             return
                         logger.info(f"{inst} 以价格 {price} 卖平{volume}手 重新报单...")
+                        signal.price = price
                         self.io_loop.create_task(self.ReqOrderInsert(signal))
         except Exception as ee:
             logger.warning(f'OnRtnOrder 发生错误: {repr(ee)}', exc_info=True)
