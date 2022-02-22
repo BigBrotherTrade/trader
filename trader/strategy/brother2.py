@@ -83,7 +83,7 @@ class TradeStrategy(BaseModule):
                 else:
                     self.save_order(order)
             await self.refresh_position()
-        # self.calculate(timezone.localtime(), create_main_bar=True)
+        # self.calculate(timezone.localtime(), create_main_bar=False)
         # await self.processing_signal3()
 
     async def refresh_account(self):
@@ -793,15 +793,15 @@ class TradeStrategy(BaseModule):
                 product_code=inst.product_code).order_by('-time').values_list(
                 'time', 'open', 'high', 'low', 'close')[:400], index_col='time', parse_dates=['time'])
             df = df.iloc[::-1]  # 日期升序排列
-            df.atr = ATR(df.high, df.low, df.close, timeperiod=atr_n)
-            df.short_trend = df.close
-            df.long_trend = df.close
+            df["atr"] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
+            df["short_trend"] = df.close
+            df["long_trend"] = df.close
             # df columns 0:open, 1:high, 2:low, 3:close, 4:atr, 5:short_trend, 6:long_trend
             for idx in range(1, df.shape[0]):
                 df.short_trend[idx] = (df.short_trend[idx-1] * (short_n - 1) + df.close[idx]) / short_n
                 df.long_trend[idx] = (df.long_trend[idx-1] * (long_n - 1) + df.close[idx]) / long_n
-            df.high_line = df.close.rolling(window=break_n).max()
-            df.low_line = df.close.rolling(window=break_n).min()
+            df["high_line"] = df.close.rolling(window=break_n).max()
+            df["low_line"] = df.close.rolling(window=break_n).min()
             idx = -1
             pos_idx = None
             buy_sig = df.short_trend[idx] > df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) >= \
