@@ -52,9 +52,7 @@ dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
 # ts_api = tushare.pro_api(config.get('Tushare', 'token'))
 IGNORE_INST_LIST = config.get('TRADE', 'ignore_inst').split(',')
 INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
-ORDER_REF_PREFIX = '33'
-ORDER_REF_SIGNAL_ID_START = 2
-ORDER_REF_SIGNAL_ID_END = 9
+ORDER_REF_SIGNAL_ID_START = -5
 
 
 def str_to_number(s):
@@ -84,13 +82,6 @@ def price_round(x: Decimal, base: Decimal):
     if p2:
         precision = len(p2[0])
     return round(base * round(x / base), precision)
-
-
-def get_next_order_ref(sig: Signal):
-    if not hasattr(get_next_order_ref, "order_ref"):
-        get_next_order_ref.order_ref = 0
-    get_next_order_ref.order_ref = 1 if get_next_order_ref.order_ref == 99 else get_next_order_ref.order_ref + 1
-    return f"{ORDER_REF_PREFIX}{sig.id:07}{sig.strategy.id % 10}{get_next_order_ref.order_ref:02}"
 
 
 def get_next_id():

@@ -29,7 +29,7 @@ from trader.utils.func_container import RegisterCallback
 from trader.utils.read_config import config, ctp_errors
 from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, \
     update_from_czce, update_from_cffex, get_contracts_argument, calc_main_inst, str_to_number, get_next_id, \
-    get_next_order_ref, ORDER_REF_PREFIX, ORDER_REF_SIGNAL_ID_START, ORDER_REF_SIGNAL_ID_END
+    ORDER_REF_SIGNAL_ID_START
 from panel.models import *
 
 logger = logging.getLogger('CTPApi')
@@ -313,7 +313,7 @@ class TradeStrategy(BaseModule):
         try:
             sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
             request_id = get_next_id()
-            order_ref = get_next_order_ref(sig)
+            order_ref = f"{timezone.localtime().strftime('%d%H%M%S')}{sig.id:05}"
             param_dict = dict()
             param_dict['RequestID'] = request_id
             param_dict['OrderRef'] = order_ref
@@ -436,9 +436,9 @@ class TradeStrategy(BaseModule):
             new_trade = False
             trade_completed = False
             order_ref: str = channel.split(':')[-1]
-            manual_trade = not order_ref.startswith(ORDER_REF_PREFIX)
+            manual_trade = int(order_ref) < 10000
             if not manual_trade:
-                signal = Signal.objects.get(id=int(order_ref[ORDER_REF_SIGNAL_ID_START:ORDER_REF_SIGNAL_ID_END]))
+                signal = Signal.objects.get(id=int(order_ref[ORDER_REF_SIGNAL_ID_START:]))
             logger.info(f"成交回报: {self.get_trade_string(trade)}")
             inst = Instrument.objects.get(product_code=self.__re_extract_code.match(trade['InstrumentID']).group(1))
             order = Order.objects.filter(
@@ -518,9 +518,9 @@ class TradeStrategy(BaseModule):
     @staticmethod
     def save_order(order: dict):
         try:
-            if not order['OrderRef'].startswith(ORDER_REF_PREFIX):  # 非本程序生成订单
+            if int(order['order_ref']) < 10000:  # 非本程序生成订单
                 return None, None
-            signal = Signal.objects.get(id=int(order['OrderRef'][ORDER_REF_SIGNAL_ID_START:ORDER_REF_SIGNAL_ID_END]))
+            signal = Signal.objects.get(id=int(order['OrderRef'][ORDER_REF_SIGNAL_ID_START:]))
             odr, created = Order.objects.update_or_create(
                 code=order['InstrumentID'], order_ref=order['OrderRef'], signal=signal, defaults={
                     'broker': signal.strategy.broker, 'strategy': signal.strategy, 'instrument': signal.instrument,
