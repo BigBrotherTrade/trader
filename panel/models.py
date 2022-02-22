@@ -39,6 +39,11 @@ def to_df(queryset, index_col=None, parse_dates=None):
     return read_sql_query(query, connection, params=params, index_col=index_col, parse_dates=parse_dates)
 
 
+class Autonumber(models.Model):
+    id = models.AutoField(verbose_name='自增值', primary_key=True)
+    create_date = models.DateTimeField(verbose_name='生成时间', auto_now_add=True)
+
+
 class Address(models.Model):
     name = models.CharField(verbose_name='名称', max_length=64)
     url = models.CharField(verbose_name='地址', max_length=128)

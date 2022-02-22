@@ -313,7 +313,8 @@ class TradeStrategy(BaseModule):
         try:
             sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
             request_id = get_next_id()
-            order_ref = f"{timezone.localtime().strftime('%d%H%M%S')}{sig.id:05}"
+            autoid = Autonumber.objects.create()
+            order_ref = f"{autoid.id:07}{sig.id:05}"
             param_dict = dict()
             param_dict['RequestID'] = request_id
             param_dict['OrderRef'] = order_ref
@@ -518,7 +519,7 @@ class TradeStrategy(BaseModule):
     @staticmethod
     def save_order(order: dict):
         try:
-            if int(order['order_ref']) < 10000:  # 非本程序生成订单
+            if int(order['OrderRef']) < 10000:  # 非本程序生成订单
                 return None, None
             signal = Signal.objects.get(id=int(order['OrderRef'][ORDER_REF_SIGNAL_ID_START:]))
             odr, created = Order.objects.update_or_create(
@@ -539,6 +540,7 @@ class TradeStrategy(BaseModule):
             return odr, created
         except Exception as ee:
             logger.warning(f'save_order 发生错误: {repr(ee)}', exc_info=True)
+            return None, None
 
     @staticmethod
     def get_order_string(order: dict) -> str:
