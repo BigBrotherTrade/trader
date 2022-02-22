@@ -19,7 +19,7 @@ from collections import defaultdict
 import datetime
 from decimal import Decimal
 import logging
-from django.db.models import Q, F, Max, Min, Sum
+from django.db.models import Q, F, Sum
 from django.utils import timezone
 from talib import ATR
 import ujson as json
@@ -626,7 +626,7 @@ class TradeStrategy(BaseModule):
             logger.debug('查询日盘信号..')
             for sig in Signal.objects.filter(
                     ~Q(instrument__exchange=ExchangeType.CFFEX), trigger_time__gte=self.__last_trading_day,
-                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现日盘信号: {sig}')
                 self.io_loop.create_task(self.ReqOrderInsert(sig))
             if (self.__trading_day - self.__last_trading_day).days > 3:
@@ -641,7 +641,7 @@ class TradeStrategy(BaseModule):
             logger.debug('查询遗漏的日盘信号..')
             for sig in Signal.objects.filter(
                     ~Q(instrument__exchange=ExchangeType.CFFEX), trigger_time__gte=self.__last_trading_day,
-                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现遗漏信号: {sig}')
                 self.io_loop.create_task(self.ReqOrderInsert(sig))
 
@@ -654,7 +654,7 @@ class TradeStrategy(BaseModule):
             logger.debug('查询股指和国债信号..')
             for sig in Signal.objects.filter(
                     instrument__exchange=ExchangeType.CFFEX, trigger_time__gte=self.__last_trading_day,
-                    strategy=self.__strategy, instrument__night_trade=False, processed=False):
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现股指和国债信号: {sig}')
                 self.io_loop.create_task(self.ReqOrderInsert(sig))
 
@@ -666,7 +666,7 @@ class TradeStrategy(BaseModule):
             logger.debug('查询遗漏的股指和国债信号..')
             for sig in Signal.objects.filter(
                     instrument__exchange=ExchangeType.CFFEX, trigger_time__gte=self.__last_trading_day,
-                    strategy=self.__strategy, instrument__night_trade=False, processed=False).all():
+                    strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现遗漏的股指和国债信号: {sig}')
                 self.io_loop.create_task(self.ReqOrderInsert(sig))
 
@@ -679,7 +679,7 @@ class TradeStrategy(BaseModule):
             logger.debug('查询夜盘信号..')
             for sig in Signal.objects.filter(
                     trigger_time__gte=self.__last_trading_day,
-                    strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
+                    strategy=self.__strategy, instrument__night_trade=True, processed=False).order_by('-priority'):
                 logger.info(f'发现夜盘信号: {sig}')
                 self.io_loop.create_task(self.ReqOrderInsert(sig))
 
@@ -691,7 +691,7 @@ class TradeStrategy(BaseModule):
             logger.debug('查询遗漏的夜盘信号..')
             for sig in Signal.objects.filter(
                     trigger_time__gte=self.__last_trading_day,
-                    strategy=self.__strategy, instrument__night_trade=True, processed=False).all():
+                    strategy=self.__strategy, instrument__night_trade=True, processed=False).order_by('-priority'):
                 logger.info(f'发现遗漏的夜盘信号: {sig}')
                 self.io_loop.create_task(self.ReqOrderInsert(sig))
 
@@ -796,14 +796,12 @@ class TradeStrategy(BaseModule):
             df["atr"] = ATR(df.high, df.low, df.close, timeperiod=atr_n)
             df["short_trend"] = df.close
             df["long_trend"] = df.close
-            # df columns 0:open, 1:high, 2:low, 3:close, 4:atr, 5:short_trend, 6:long_trend
-            for idx in range(1, df.shape[0]):
+            for idx in range(1, df.shape[0]):  # 手动计算SMA
                 df.short_trend[idx] = (df.short_trend[idx-1] * (short_n - 1) + df.close[idx]) / short_n
                 df.long_trend[idx] = (df.long_trend[idx-1] * (long_n - 1) + df.close[idx]) / long_n
             df["high_line"] = df.close.rolling(window=break_n).max()
             df["low_line"] = df.close.rolling(window=break_n).min()
             idx = -1
-            pos_idx = None
             buy_sig = df.short_trend[idx] > df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) >= \
                 price_round(df.high_line[idx - 1], inst.price_tick)
             sell_sig = df.short_trend[idx] < df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) <= \
@@ -814,7 +812,6 @@ class TradeStrategy(BaseModule):
                 instrument=inst, shares__gt=0, open_time__lt=day).first()
             roll_over = False
             if pos:
-                pos_idx = df.index.get_loc(pos.open_time.astimezone().date().isoformat())
                 roll_over = pos.code != inst.main_code and pos.code < inst.main_code
             elif self.__strategy.force_opens.filter(id=inst.id).exists() and not buy_sig and not sell_sig:
                 logger.info(f'强制开仓: {inst}')
@@ -823,7 +820,8 @@ class TradeStrategy(BaseModule):
                 else:
                     sell_sig = True
                 self.__strategy.force_opens.remove(inst)
-            signal = signal_code = signal_value = price = volume = use_margin = None
+            signal = signal_code = price = volume = use_margin = None
+            priority = PriorityType.LOW
             if pos:
                 # 多头持仓
                 if pos.direction == DirectionType.values[DirectionType.LONG]:
@@ -838,35 +836,31 @@ class TradeStrategy(BaseModule):
                             break
                         logger.debug(f"发现换月前持仓:{last_pos} 开仓时间: {last_pos.open_time}")
                         first_pos = last_pos
-                    hh = float(MainBar.objects.filter(
-                        exchange=inst.exchange, product_code=pos.instrument.product_code,
-                        time__gte=first_pos.open_time.date(), time__lte=day).aggregate(Max('high'))['high__max'])
+                    pos_idx = df.index.get_loc(first_pos.open_time.astimezone().date().isoformat())
                     # 多头止损
-                    if df.close[idx] <= hh - df.atr[pos_idx - 1] * stop_n:
+                    if df.close[idx] <= df.high[pos_idx:idx].max() - df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.SELL
                         signal_code = pos.code
-                        # 止损时 signal_value 为止损价
-                        signal_value = hh - df.atr[pos_idx - 1] * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
                         price = self.calc_down_limit(inst, last_bar)
+                        priority = PriorityType.High
                     # 多头换月
                     elif roll_over:
                         signal = SignalType.ROLL_OPEN
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                        # 换月时 signal_value 为旧合约的平仓价
-                        signal_value = self.calc_down_limit(inst, last_bar)
                         new_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                         price = self.calc_up_limit(inst, new_bar)
+                        priority = PriorityType.Normal
                         Signal.objects.update_or_create(
                             code=pos.code, strategy=self.__strategy, instrument=inst,
                             type=SignalType.ROLL_CLOSE, trigger_time=day, defaults={
-                                'price': signal_value, 'volume': volume,
-                                'priority': PriorityType.Normal, 'processed': False})
+                                'price': self.calc_down_limit(inst, last_bar), 'volume': volume,
+                                'priority': priority, 'processed': False})
                 # 空头持仓
                 else:
                     first_pos = pos
@@ -880,66 +874,49 @@ class TradeStrategy(BaseModule):
                             break
                         logger.debug(f"发现换月前持仓:{last_pos} 开仓时间: {last_pos.open_time}")
                         first_pos = last_pos
-                    ll = float(MainBar.objects.filter(
-                        exchange=inst.exchange, product_code=pos.instrument.product_code,
-                        time__gte=first_pos.open_time.date(), time__lte=day).aggregate(Min('low'))['low__min'])
+                    pos_idx = df.index.get_loc(first_pos.open_time.astimezone().date().isoformat())
                     # 空头止损
-                    if df.close[idx] >= ll + df.atr[pos_idx - 1] * stop_n:
+                    if df.close[idx] >= df.low[pos_idx:idx].min() + df.atr[pos_idx - 1] * stop_n:
                         signal = SignalType.BUY_COVER
                         signal_code = pos.code
-                        signal_value = ll + df.atr[pos_idx - 1] * stop_n
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
                         price = self.calc_up_limit(inst, last_bar)
+                        priority = PriorityType.High
                     # 空头换月
                     elif roll_over:
                         signal = SignalType.ROLL_OPEN
                         volume = pos.shares
                         last_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=pos.code, time=day.date()).first()
-                        signal_value = self.calc_up_limit(inst, last_bar)
                         new_bar = DailyBar.objects.filter(
                             exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                         price = self.calc_down_limit(inst, new_bar)
+                        priority = PriorityType.Normal
                         Signal.objects.update_or_create(
                             code=pos.code, strategy=self.__strategy, instrument=inst,
                             type=SignalType.ROLL_CLOSE, trigger_time=day, defaults={
-                                'price': signal_value, 'volume': volume,
-                                'priority': PriorityType.Normal, 'processed': False})
-            # 做多
-            elif buy_sig:
+                                'price': self.calc_up_limit(inst, last_bar), 'volume': volume,
+                                'priority': priority, 'processed': False})
+            # 开新仓
+            elif buy_sig or sell_sig:
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
                 volume = round((self.__current + self.__fake) * risk / risk_each)
                 if volume > 0:
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     use_margin = new_bar.settlement * inst.volume_multiple * inst.margin_rate * volume
-                    price = self.calc_up_limit(inst, new_bar)
-                    signal = SignalType.BUY
-                    signal_value = df.high_line[idx - 1]
+                    price = self.calc_up_limit(inst, new_bar) if buy_sig else self.calc_down_limit(inst, new_bar)
+                    signal = SignalType.BUY if buy_sig else SignalType.SELL_SHORT
                 else:
-                    logger.info(f'做多{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
-            # 做空
-            elif sell_sig:
-                risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
-                volume = round((self.__current + self.__fake) * risk / risk_each)
-                if volume > 0:
-                    new_bar = DailyBar.objects.filter(
-                        exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
-                    use_margin = new_bar.settlement * inst.volume_multiple * inst.margin_rate * volume
-                    price = self.calc_down_limit(inst, new_bar)
-                    signal = SignalType.SELL_SHORT
-                    signal_value = df.low_line[idx - 1]
-                else:
-                    logger.info(f'做空{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。')
+                    logger.info(f"做{'多' if buy_sig else '空'}{inst},单手风险:{risk_each:.0f},超出风控额度，放弃。")
             if signal:
                 use_margin = use_margin if use_margin else 0
                 sig, _ = Signal.objects.update_or_create(
                     code=signal_code if signal_code else inst.main_code,
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
-                        'price': price, 'volume': volume, 'trigger_value': signal_value,
-                        'priority': PriorityType.Normal, 'processed': False})
+                        'price': price, 'volume': volume, 'priority': priority, 'processed': False})
                 logger.info(f"新信号: {sig} 预估保证金: {use_margin:.0f}({use_margin/10000:.1f}万)")
                 return signal, use_margin
         except Exception as e:

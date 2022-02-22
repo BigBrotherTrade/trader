@@ -32,7 +32,6 @@ from django.utils import timezone
 import redis
 from talib import ATR
 from tqdm import tqdm
-# import tushare
 
 from panel.models import *
 from trader.utils import ApiStruct
@@ -49,7 +48,6 @@ cffex_ip = 'www.cffex.com.cn'    # www.cffex.com.cn
 shfe_ip = 'www.shfe.com.cn'      # www.shfe.com.cn
 czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
 dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
-# ts_api = tushare.pro_api(config.get('Tushare', 'token'))
 IGNORE_INST_LIST = config.get('TRADE', 'ignore_inst').split(',')
 INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
 ORDER_REF_SIGNAL_ID_START = -5
