@@ -533,6 +533,9 @@ class TradeStrategy(BaseModule):
                     'send_time': timezone.make_aware(
                         datetime.datetime.strptime(order['InsertDate'] + order['InsertTime'], '%Y%m%d%H:%M:%S')),
                     'update_time': timezone.localtime()})
+            if order['OrderStatus'] == ApiStruct.OST_Canceled:  # 删除错误订单
+                odr.delete()
+                return None, None
             now = timezone.localtime().date()
             if created and odr.send_time.date() > timezone.localtime().date():  # 夜盘成交时返回的时间是下一个交易日，需要改成今天
                 odr.send_time.replace(year=now.year, month=now.month, day=now.day)
