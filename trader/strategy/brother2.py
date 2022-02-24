@@ -740,7 +740,7 @@ class TradeStrategy(BaseModule):
             p_code_set = set(self.__inst_ids)
             for code in self.__cur_pos.keys():
                 p_code_set.add(self.__re_extract_code.match(code).group(1))
-            sig_dict = dict()
+            all_margin = 0
             for inst in Instrument.objects.all().order_by('exchange', 'product_code'):
                 if create_main_bar:
                     logger.debug(f'生成连续合约: {inst.name}')
@@ -748,9 +748,7 @@ class TradeStrategy(BaseModule):
                 if inst.product_code in p_code_set:
                     logger.debug(f'计算交易信号: {inst.name}')
                     sig, margin = self.calc_signal(inst, day)
-                    if sig:
-                        sig_dict[sig] = margin
-            all_margin = sum(sig_dict.values())
+                    all_margin += margin
             if (all_margin + self.__margin) / self.__current > 0.80:
                 logger.info(f"！！！风险提示！！！开仓保证金共计: {all_margin:.0f}({all_margin/10000:.1f}万) "
                             f"账户风险度将达到: {100 * (all_margin + self.__margin) / self.__current:.0f}% "
