@@ -307,11 +307,8 @@ class TradeStrategy(BaseModule):
                 await sub_client.close()
             return None
 
-    async def ReqOrderInsert(self, sig: Signal):
-        sub_client = None
-        channel_rtn_odr, channel_rsp_err = None, None
+    def ReqOrderInsert(self, sig: Signal):
         try:
-            sub_client = self.redis_client.pubsub(ignore_subscribe_messages=True)
             request_id = get_next_id()
             autoid = Autonumber.objects.create()
             order_ref = f"{autoid.id:07}{sig.id:05}"
@@ -355,33 +352,10 @@ class TradeStrategy(BaseModule):
                                                close_time__isnull=True).first()
                     param_dict['Direction'] = ApiStruct.D_Buy if pos.direction == DirectionType.values[
                         DirectionType.LONG] else ApiStruct.D_Sell
-                    if pos.open_time.astimezone().date() == timezone.localtime().date() \
-                            and pos.instrument.exchange == ExchangeType.SHFE:
-                        param_dict['CombOffsetFlag'] = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
                     logger.info(f'{pos.code}->{sig.code} {pos.direction}头换月开新{sig.volume}手 价格: {sig.price}')
-            channel_rtn_odr = self.__trade_response_format.format('OnRtnOrder', order_ref)
-            channel_rsp_err = self.__trade_response_format.format('OnRspError', request_id)
-            # 同时发送多个订单时，订阅 OnRspOrderInsert:0 会导致取消订阅时报超时错误
-            # channel_rsp_odr = self.__trade_response_format.format('OnRspOrderInsert', 0)
-            # await sub_client.psubscribe(channel_rtn_odr, channel_rsp_err, channel_rsp_odr)
-            await sub_client.psubscribe(channel_rtn_odr, channel_rsp_err)
-            task = asyncio.create_task(self.query_reader(sub_client))
             self.raw_redis.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(param_dict))
-            await asyncio.wait_for(task, HANDLER_TIME_OUT)
-            await sub_client.punsubscribe()
-            await sub_client.close()
-            result = task.result()[0]
-            if 'ErrorID' in result:
-                logger.warning(f"提交订单出错: {ctp_errors[result['ErrorID']]}")
-                return False
-            logger.debug(f"ReqOrderInsert, rst: {result['StatusMsg']}")
-            return result
         except Exception as e:
             logger.warning(f'ReqOrderInsert 发生错误: {repr(e)}', exc_info=True)
-            if sub_client and sub_client.in_pubsub and channel_rtn_odr:
-                await sub_client.unsubscribe()
-                await sub_client.close()
-            return False
 
     async def cancel_order(self, order: dict):
         sub_client = None
@@ -586,7 +560,7 @@ class TradeStrategy(BaseModule):
                             return
                         logger.info(f"{inst} 以价格 {price} 开多{volume}手 重新报单...")
                         signal.price = price
-                        self.io_loop.create_task(self.ReqOrderInsert(signal))
+                        self.io_loop.call_soon(self.ReqOrderInsert, signal)
                     else:
                         delta = (last_bar.settlement - price) * Decimal(0.5)
                         price = price_round(last_bar.settlement - delta, inst.price_tick)
@@ -595,7 +569,7 @@ class TradeStrategy(BaseModule):
                             return
                         logger.info(f"{inst} 以价格 {price} 开空{volume}手 重新报单...")
                         signal.price = price
-                        self.io_loop.create_task(self.ReqOrderInsert(signal))
+                        self.io_loop.call_soon(self.ReqOrderInsert, signal)
                 else:
                     if order['Direction'] == DirectionType.LONG:
                         delta = (price - last_bar.settlement) * Decimal(0.5)
@@ -605,7 +579,7 @@ class TradeStrategy(BaseModule):
                             return
                         logger.info(f"{inst} 以价格 {price} 买平{volume}手 重新报单...")
                         signal.price = price
-                        self.io_loop.create_task(self.ReqOrderInsert(signal))
+                        self.io_loop.call_soon(self.ReqOrderInsert, signal)
                     else:
                         delta = (last_bar.settlement - price) * Decimal(0.5)
                         price = price_round(last_bar.settlement - delta, inst.price_tick)
@@ -614,7 +588,7 @@ class TradeStrategy(BaseModule):
                             return
                         logger.info(f"{inst} 以价格 {price} 卖平{volume}手 重新报单...")
                         signal.price = price
-                        self.io_loop.create_task(self.ReqOrderInsert(signal))
+                        self.io_loop.call_soon(self.ReqOrderInsert, signal)
         except Exception as ee:
             logger.warning(f'OnRtnOrder 发生错误: {repr(ee)}', exc_info=True)
 
@@ -633,7 +607,7 @@ class TradeStrategy(BaseModule):
                     ~Q(instrument__exchange=ExchangeType.CFFEX), trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现日盘信号: {sig}')
-                self.io_loop.create_task(self.ReqOrderInsert(sig))
+                self.io_loop.call_soon(self.ReqOrderInsert, sig)
             if (self.__trading_day - self.__last_trading_day).days > 3:
                 logger.info(f'假期后第一天，处理节前未成交夜盘信号.')
                 self.io_loop.call_soon(asyncio.create_task, self.processing_signal3(day))
@@ -648,7 +622,7 @@ class TradeStrategy(BaseModule):
                     ~Q(instrument__exchange=ExchangeType.CFFEX), trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现遗漏信号: {sig}')
-                self.io_loop.create_task(self.ReqOrderInsert(sig))
+                self.io_loop.call_soon(self.ReqOrderInsert, sig)
 
     @RegisterCallback(crontab='25 9 * * *')
     async def processing_signal2(self):
@@ -661,7 +635,7 @@ class TradeStrategy(BaseModule):
                     instrument__exchange=ExchangeType.CFFEX, trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现股指和国债信号: {sig}')
-                self.io_loop.create_task(self.ReqOrderInsert(sig))
+                self.io_loop.call_soon(self.ReqOrderInsert, sig)
 
     @RegisterCallback(crontab='31 9 * * *')
     async def check_signal2_processed(self):
@@ -673,7 +647,7 @@ class TradeStrategy(BaseModule):
                     instrument__exchange=ExchangeType.CFFEX, trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=False, processed=False).order_by('-priority'):
                 logger.info(f'发现遗漏的股指和国债信号: {sig}')
-                self.io_loop.create_task(self.ReqOrderInsert(sig))
+                self.io_loop.call_soon(self.ReqOrderInsert, sig)
 
     @RegisterCallback(crontab='55 20 * * *')
     async def processing_signal3(self):
@@ -686,7 +660,7 @@ class TradeStrategy(BaseModule):
                     trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=True, processed=False).order_by('-priority'):
                 logger.info(f'发现夜盘信号: {sig}')
-                self.io_loop.create_task(self.ReqOrderInsert(sig))
+                self.io_loop.call_soon(self.ReqOrderInsert, sig)
 
     @RegisterCallback(crontab='1 21 * * *')
     async def check_signal3_processed(self):
@@ -698,7 +672,7 @@ class TradeStrategy(BaseModule):
                     trigger_time__gte=self.__last_trading_day,
                     strategy=self.__strategy, instrument__night_trade=True, processed=False).order_by('-priority'):
                 logger.info(f'发现遗漏的夜盘信号: {sig}')
-                self.io_loop.create_task(self.ReqOrderInsert(sig))
+                self.io_loop.call_soon(self.ReqOrderInsert, sig)
 
     @RegisterCallback(crontab='20 15 * * *')
     async def refresh_all(self):
