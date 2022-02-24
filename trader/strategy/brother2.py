@@ -329,7 +329,7 @@ class TradeStrategy(BaseModule):
                     pos = Trade.objects.filter(
                         broker=self.__broker, strategy=self.__strategy, code=sig.code, shares=sig.volume,
                         close_time__isnull=True, direction=DirectionType.values[DirectionType.SHORT] if
-                        sig.type == SignalType.SELL_SHORT else DirectionType.values[DirectionType.LONG]).first()
+                        sig.type == SignalType.BUY_COVER else DirectionType.values[DirectionType.LONG]).first()
                     if pos.open_time.astimezone().date() == timezone.localtime().date() \
                             and pos.instrument.exchange == ExchangeType.SHFE:
                         param_dict['CombOffsetFlag'] = ApiStruct.OF_CloseToday  # 上期所区分平今和平昨
