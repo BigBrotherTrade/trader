@@ -73,14 +73,13 @@ class TradeStrategy(BaseModule):
             order_list = await self.query('Order')
             for order in order_list:
                 # 未成交订单
-                if int(order['OrderStatus']) in range(1, 5) and \
-                        order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
+                if int(order['OrderStatus']) in range(1, 5) and order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
                     direct_str = DirectionType.values[order['Direction']]
                     logger.info(f"撤销未成交订单: 合约{order['InstrumentID']} {direct_str}单 {order['VolumeTotal']}手 "
                                 f"价格{order['LimitPrice']}")
                     await self.cancel_order(order)
                 # 已成交订单
-                else:
+                elif order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
                     self.save_order(order)
             await self.refresh_position()
         # self.calculate(timezone.localtime(), create_main_bar=False)
@@ -417,8 +416,7 @@ class TradeStrategy(BaseModule):
             logger.info(f"成交回报: {self.get_trade_string(trade)}")
             inst = Instrument.objects.get(product_code=self.__re_extract_code.match(trade['InstrumentID']).group(1))
             order = Order.objects.filter(
-                order_ref=order_ref, code=trade['InstrumentID']).order_by('-send_time').first() if manual_trade else \
-                Order.objects.filter(signal=signal).first()
+                order_ref=order_ref, code=trade['InstrumentID']).order_by('-send_time').first()
             trade_cost = trade['Volume'] * Decimal(trade['Price']) * inst.fee_money * inst.volume_multiple + \
                 trade['Volume'] * inst.fee_volume
             trade_margin = trade['Volume'] * Decimal(trade['Price']) * inst.margin_rate
@@ -487,6 +485,8 @@ class TradeStrategy(BaseModule):
             if trade_completed and not manual_trade:
                 signal.processed = True
                 signal.save(update_fields=['processed'])
+                order.signal = signal
+                order.save(update_fields=['signal'])
         except Exception as ee:
             logger.warning(f'OnRtnTrade 发生错误: {repr(ee)}', exc_info=True)
 
@@ -497,7 +497,7 @@ class TradeStrategy(BaseModule):
                 return None, None
             signal = Signal.objects.get(id=int(order['OrderRef'][ORDER_REF_SIGNAL_ID_START:]))
             odr, created = Order.objects.update_or_create(
-                code=order['InstrumentID'], order_ref=order['OrderRef'], signal=signal, defaults={
+                code=order['InstrumentID'], order_ref=order['OrderRef'], defaults={
                     'broker': signal.strategy.broker, 'strategy': signal.strategy, 'instrument': signal.instrument,
                     'front': order['FrontID'], 'session': order['SessionID'], 'price': order['LimitPrice'],
                     'volume': order['VolumeTotalOriginal'],
@@ -514,6 +514,7 @@ class TradeStrategy(BaseModule):
             if created and odr.send_time.date() > timezone.localtime().date():  # 夜盘成交时返回的时间是下一个交易日，需要改成今天
                 odr.send_time.replace(year=now.year, month=now.month, day=now.day)
                 odr.save(update_fields=['send_time'])
+            odr.signal = signal
             return odr, created
         except Exception as ee:
             logger.warning(f'save_order 发生错误: {repr(ee)}', exc_info=True)
