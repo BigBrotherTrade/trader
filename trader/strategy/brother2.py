@@ -784,10 +784,8 @@ class TradeStrategy(BaseModule):
                 price_round(df.high_line[idx - 1], inst.price_tick)
             sell_sig = df.short_trend[idx] < df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) <= \
                 price_round(df.low_line[idx - 1], inst.price_tick)
-            pos = Trade.objects.filter(
-                Q(close_time__isnull=True) | Q(close_time__gt=day),
-                broker=self.__broker, strategy=self.__strategy,
-                instrument=inst, shares__gt=0, open_time__lt=day).first()
+            pos = Trade.objects.filter(close_time__isnull=True, broker=self.__broker, strategy=self.__strategy,
+                                       instrument=inst, shares__gt=0).first()
             roll_over = False
             if pos:
                 roll_over = pos.code != inst.main_code and pos.code < inst.main_code
