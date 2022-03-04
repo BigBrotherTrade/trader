@@ -110,7 +110,7 @@ class TradeStrategy(BaseModule):
             self.__broker.margin = self.__margin
             self.__broker.save(update_fields=['cash', 'current', 'pre_balance', 'margin'])
             logger.debug(f"更新账户,可用资金: {self.__cash:,.0f} 静态权益: {self.__pre_balance:,.0f} "
-                         f"动态权益: {self.__current:,.0f} 出入金: {self.__withdraw:,.0f} 虚拟: {fake:,.0f}")
+                         f"动态权益: {self.__current:,.0f} 出入金: {self.__withdraw - self.__deposit:,.0f} 虚拟: {fake:,.0f}")
         except Exception as e:
             logger.warning(f'refresh_account 发生错误: {repr(e)}', exc_info=True)
 
