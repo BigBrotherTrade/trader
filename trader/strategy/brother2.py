@@ -67,8 +67,9 @@ class TradeStrategy(BaseModule):
     async def start(self):
         await self.install()
         self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=61)
-        now = int(timezone.localtime().strftime('%H%M'))
-        if 840 <= now <= 1550 or 2010 <= now <= 2359:  # 非交易时间查不到数据
+        today = timezone.localtime()
+        now = int(today.strftime('%H%M'))
+        if today.isoweekday() < 6 and (840 <= now <= 1550 or 2010 <= now <= 2359):  # 非交易时间查不到数据
             await self.refresh_account()
             order_list = await self.query('Order')
             for order in order_list:
@@ -82,7 +83,8 @@ class TradeStrategy(BaseModule):
                 elif order['OrderSubmitStatus'] == ApiStruct.OSS_Accepted:
                     self.save_order(order)
             await self.refresh_position()
-        # self.calculate(timezone.localtime(), create_main_bar=False)
+        # today = timezone.make_aware(datetime.datetime.strptime(self.raw_redis.get('LastTradingDay'), '%Y%m%d'))
+        # self.calculate(today, create_main_bar=False)
         # await self.processing_signal3()
 
     async def refresh_account(self):
@@ -750,7 +752,7 @@ class TradeStrategy(BaseModule):
                     logger.debug(f'计算交易信号: {inst.name}')
                     sig, margin = self.calc_signal(inst, day)
                     all_margin += margin
-            if (all_margin + self.__margin) / self.__current > 0.80:
+            if (all_margin + self.__margin) / self.__current > 0.8:
                 logger.info(f"！！！风险提示！！！开仓保证金共计: {all_margin:.0f}({all_margin/10000:.1f}万) "
                             f"账户风险度将达到: {100 * (all_margin + self.__margin) / self.__current:.0f}% "
                             f"建议追加保证金或减少开仓手数！")
