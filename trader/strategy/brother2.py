@@ -798,7 +798,8 @@ class TradeStrategy(BaseModule):
                 else:
                     sell_sig = True
                 self.__strategy.force_opens.remove(inst)
-            signal = signal_code = price = volume = use_margin = None
+            signal = signal_code = price = volume = volume_ori = use_margin = None
+
             priority = PriorityType.LOW
             if pos:
                 # 多头持仓
@@ -880,7 +881,8 @@ class TradeStrategy(BaseModule):
             # 开新仓
             elif buy_sig or sell_sig:
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
-                volume = round((self.__current + self.__fake) * risk / risk_each)
+                volume_ori = (self.__current + self.__fake) * risk / risk_each
+                volume = round(volume_ori)
                 if volume > 0:
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
@@ -895,7 +897,9 @@ class TradeStrategy(BaseModule):
                     code=signal_code if signal_code else inst.main_code,
                     strategy=self.__strategy, instrument=inst, type=signal, trigger_time=day, defaults={
                         'price': price, 'volume': volume, 'priority': priority, 'processed': False})
-                logger.info(f"新信号: {sig} 预估保证金: {use_margin:.0f}({use_margin/10000:.1f}万)")
+                volume_ori = volume_ori if volume_ori else volume
+                logger.info(f"新信号: {sig}({volume_ori:.1f}手) "
+                            f"预估保证金: {use_margin:.0f}({use_margin/10000:.1f}万)")
                 return signal, use_margin
         except Exception as e:
             logger.warning(f'calc_signal 发生错误: {repr(e)}', exc_info=True)
