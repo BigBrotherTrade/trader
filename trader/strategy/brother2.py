@@ -442,7 +442,7 @@ class TradeStrategy(BaseModule):
                         direction=DirectionType.values[trade['Direction']],
                         open_time=trade_time, shares=order.volume if order else trade['Volume'], cost=trade_cost,
                         filled_shares=trade['Volume'], avg_entry_price=trade['Price'], frozen_margin=trade_margin)
-                if order is None or order.volume == trade['Volume']:
+                if order is None or order.status == OrderStatus.values[OrderStatus.AllTraded]:
                     trade_completed = True
                 if (not new_trade and not manual_trade) or (trade_completed and not new_trade and manual_trade):
                     last_trade.avg_entry_price = \
