@@ -24,6 +24,8 @@ from django.utils import timezone
 from talib import ATR
 import ujson as json
 import aioredis
+
+import trader.utils.ApiStruct
 from trader.strategy import BaseModule
 from trader.utils.func_container import RegisterCallback
 from trader.utils.read_config import config, ctp_errors
@@ -880,9 +882,12 @@ class TradeStrategy(BaseModule):
                                 'priority': priority, 'processed': False})
             # 开新仓
             elif buy_sig or sell_sig:
+                start_cash = Performance.objects.last().unit_count
+                profit = Trade.objects.filter(strategy=self.__strategy, instrument=inst).aggregate(s=Sum('profit'))['s']
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
-                volume_ori = (self.__current + self.__fake) * risk / risk_each
+                volume_ori = (start_cash + profit) * risk / risk_each
                 volume = round(volume_ori)
+                print(f"{inst}: {start_cash:,.0f} + {profit:,.0f} / {risk_each:,.0f} = {volume_ori}")
                 if volume > 0:
                     new_bar = DailyBar.objects.filter(
                         exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
