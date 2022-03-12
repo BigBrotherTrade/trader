@@ -31,12 +31,24 @@ class ExchangeType(DjangoChoices):
 
 
 class SectionType(DjangoChoices):
-    Stock = C(label='股票', value='股票')
-    Bond = C(label='债券', value='债券')
-    Metal = C(label='基本金属', value='基本金属')
-    Agricultural = C(label='农产品', value='农产品')
-    EnergyChemical = C(label='能源化工', value='能源化工')
-    BlackMaterial = C(label='黑色建材', value='黑色建材')
+    Stock = C(label='股票')
+    Bond = C(label='债券')
+    Metal = C(label='基本金属')
+    Agricultural = C(label='农产品')
+    EnergyChemical = C(label='能源化工')
+    BlackMaterial = C(label='黑色建材')
+
+
+class SortType(DjangoChoices):
+    Stock = C(label='股票')
+    Bond = C(label='债券')
+    Rare = C(label='贵金属')
+    Metal = C(label='基本金属')
+    EdibleOil = C(label='食用油')
+    Feed = C(label='动物饲料')
+    Cotton = C(label='棉')
+    EnergyChemical = C(label='能源化工')
+    BlackMaterial = C(label='黑色建材')
 
 
 class AddressType(DjangoChoices):

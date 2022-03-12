@@ -146,6 +146,7 @@ class Param(models.Model):
 class Instrument(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
     section = models.CharField('分类', max_length=48, null=True, blank=True, choices=SectionType.choices)
+    sort = models.CharField('品种', max_length=48, null=True, blank=True, choices=SortType.choices)
     name = models.CharField('名称', max_length=32, null=True, blank=True)
     product_code = models.CharField('代码', max_length=16, unique=True)
     all_inst = models.CharField('品种列表', max_length=256, null=True, blank=True)
