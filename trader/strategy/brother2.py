@@ -823,6 +823,7 @@ class TradeStrategy(BaseModule):
                 start_cash = Performance.objects.last().unit_count
                 # 原始扎堆儿
                 profit = Trade.objects.filter(strategy=self.__strategy, instrument__section=inst.section).aggregate(sum=Sum('profit'))['sum']
+                profit = profit if profit else 0
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
                 volume_ori = (start_cash + profit) * risk / risk_each
                 volume = round(volume_ori)
