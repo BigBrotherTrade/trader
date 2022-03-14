@@ -24,8 +24,6 @@ from django.utils import timezone
 from talib import ATR
 import ujson as json
 import aioredis
-
-import trader.utils.ApiStruct
 from trader.strategy import BaseModule
 from trader.utils.func_container import RegisterCallback
 from trader.utils.read_config import config, ctp_errors
@@ -740,10 +738,8 @@ class TradeStrategy(BaseModule):
             df["high_line"] = df.close.rolling(window=break_n).max()
             df["low_line"] = df.close.rolling(window=break_n).min()
             idx = -1
-            buy_sig = df.short_trend[idx] > df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) >= price_round(df.high_line[idx - 1],
-                                                                                                                              inst.price_tick)
-            sell_sig = df.short_trend[idx] < df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) <= price_round(df.low_line[idx - 1],
-                                                                                                                               inst.price_tick)
+            buy_sig = df.short_trend[idx] > df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) >= price_round(df.high_line[idx - 1], inst.price_tick)
+            sell_sig = df.short_trend[idx] < df.long_trend[idx] and price_round(df.close[idx], inst.price_tick) <= price_round(df.low_line[idx - 1], inst.price_tick)
             pos = Trade.objects.filter(close_time__isnull=True, broker=self.__broker, strategy=self.__strategy, instrument=inst, shares__gt=0).first()
             roll_over = False
             if pos:
@@ -756,7 +752,6 @@ class TradeStrategy(BaseModule):
                     sell_sig = True
                 self.__strategy.force_opens.remove(inst)
             signal = signal_code = price = volume = volume_ori = use_margin = None
-
             priority = PriorityType.LOW
             if pos:
                 # 多头持仓

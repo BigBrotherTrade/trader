@@ -140,5 +140,5 @@ ENV/
 
 # Rope project settings
 .ropeproject
-
+/test/test_jq2.py
 /test/test_jq.py
