@@ -74,4 +74,4 @@ if __name__ == '__main__':
     print('used config file:', config_file)
     print('log stored in:', app_dir.user_log_dir)
     print('pid file:', pid_path)
-    TradeStrategy(name='大哥2.0').run()
+    TradeStrategy(name='大哥2.2').run()
