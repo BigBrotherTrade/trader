@@ -644,8 +644,8 @@ class TradeStrategy(BaseModule):
             logger.info('今日是非交易日, 不更新任何数据。')
             return
         await self.refresh_account()
-        await self.refresh_instrument()
         await self.refresh_position()
+        await self.refresh_instrument()
         logger.debug('全部更新完成!')
 
     @RegisterCallback(crontab='30 15 * * *')
