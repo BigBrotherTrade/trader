@@ -827,7 +827,7 @@ class TradeStrategy(BaseModule):
                 risk_each = Decimal(df.atr[idx]) * Decimal(inst.volume_multiple)
                 volume_ori = (start_cash + profit) * risk / risk_each
                 volume = round(volume_ori)
-                print(f"{inst}: {start_cash:,.0f} + {profit:,.0f} / {risk_each:,.0f} = {volume_ori}")
+                print(f"{inst}: ({start_cash:,.0f} + {profit:,.0f}) / {risk_each:,.0f} = {volume_ori}")
                 if volume > 0:
                     new_bar = DailyBar.objects.filter(exchange=inst.exchange, code=inst.main_code, time=day.date()).first()
                     use_margin = new_bar.settlement * inst.volume_multiple * inst.margin_rate * volume
