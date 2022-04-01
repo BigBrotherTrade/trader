@@ -692,7 +692,7 @@ class TradeStrategy(BaseModule):
                 self.io_loop.call_soon(self.calculate, day)
             else:
                 failed_tasks = [tasks[i] for i, rst in enumerate(result) if not rst]
-                self.io_loop.call_later(10, asyncio.create_task, self.collect_quote(failed_tasks))
+                self.io_loop.call_later(10*60, asyncio.create_task, self.collect_quote(failed_tasks))
         except Exception as e:
             logger.warning(f'collect_quote 发生错误: {repr(e)}', exc_info=True)
         logger.debug('盘后计算完毕!')
