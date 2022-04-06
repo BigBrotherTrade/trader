@@ -577,7 +577,7 @@ class TradeStrategy(BaseModule):
                 self.io_loop.call_soon(self.ReqOrderInsert, sig)
             if (self.__trading_day - self.__last_trading_day).days > 3:
                 logger.info(f'假期后第一天，处理节前未成交夜盘信号.')
-                self.io_loop.call_soon(asyncio.create_task, self.processing_signal3(day))
+                self.io_loop.call_soon(asyncio.create_task, self.processing_signal3())
 
     @RegisterCallback(crontab='1 9 * * *')
     async def check_signal1_processed(self):
