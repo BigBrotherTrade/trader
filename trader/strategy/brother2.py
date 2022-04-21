@@ -66,7 +66,7 @@ class TradeStrategy(BaseModule):
         self.raw_redis.set('HEARTBEAT:TRADER', 1, ex=61)
         today = timezone.localtime()
         now = int(today.strftime('%H%M'))
-        if today.isoweekday() < 6 and (840 <= now <= 1550 or 2010 <= now <= 2359):  # 非交易时间查不到数据
+        if today.isoweekday() < 6 and (820 <= now <= 1550 or 2010 <= now <= 2359):  # 非交易时间查不到数据
             await self.refresh_account()
             order_list = await self.query('Order')
             for order in order_list:
@@ -334,7 +334,8 @@ class TradeStrategy(BaseModule):
                 case SignalType.ROLL_OPEN:
                     param_dict['CombOffsetFlag'] = ApiStruct.OF_Open
                     pos = Trade.objects.filter(
-                        broker=self.__broker, strategy=self.__strategy, code=sig.instrument.last_main, shares=sig.volume, close_time__isnull=True).first()
+                        Q(close_time__isnull=True) | Q(close_time__date__gte=timezone.localtime().now().date()),
+                        broker=self.__broker, strategy=self.__strategy, code=sig.instrument.last_main, shares=sig.volume).first()
                     param_dict['Direction'] = ApiStruct.D_Buy if pos.direction == DirectionType.values[DirectionType.LONG] else ApiStruct.D_Sell
                     logger.info(f'{pos.code}->{sig.code} {pos.direction}头换月开新{sig.volume}手 价格: {sig.price}')
             self.raw_redis.publish(self.__request_format.format('ReqOrderInsert'), json.dumps(param_dict))
@@ -435,7 +436,7 @@ class TradeStrategy(BaseModule):
                                                   broker=self.__broker, strategy=self.__strategy, instrument=inst, code=trade['InstrumentID'],
                                                   direction=open_direct).first()
                 # print(connection.queries[-1]['sql'])
-                print(f'trade={last_trade}')
+                logger.debug(f'trade={last_trade}')
                 if last_trade:
                     if last_trade.closed_shares and last_trade.avg_exit_price:
                         last_trade.avg_exit_price = (last_trade.avg_exit_price * last_trade.closed_shares + trade['Volume'] * Decimal(trade['Price'])) / \
