@@ -690,6 +690,8 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
                     for cell in inst_data_raw:
                         if len(cell) > 0:
                             inst_data.append(cell)
+                    if len(inst_data) == 0:
+                        continue
                     """
 [0合约,1交易保证金比例(投机),2交易保证金金额（元/手）(投机),3交易保证金比例(套保),4交易保证金金额（元/手）(套保),5涨跌停板比例,
      6涨停板价位（元）,7跌停板价位（元）]
