@@ -41,6 +41,7 @@ logger = logging.getLogger('utils')
 
 max_conn_shfe = asyncio.Semaphore(15)
 max_conn_dce = asyncio.Semaphore(5)
+max_conn_gfex = asyncio.Semaphore(5)
 max_conn_czce = asyncio.Semaphore(15)
 max_conn_cffex = asyncio.Semaphore(15)
 max_conn_sina = asyncio.Semaphore(15)
@@ -241,10 +242,11 @@ async def update_from_dce(day: datetime.datetime) -> bool:
                         continue
                     if DCE_NAME_CODE[inst_data[0]] in IGNORE_INST_LIST:
                         continue
+                    expire_date = inst_data[1].removeprefix(DCE_NAME_CODE[inst_data[0]])
                     DailyBar.objects.update_or_create(
-                        code=DCE_NAME_CODE[inst_data[0]] + inst_data[1],
+                        code=inst_data[1],
                         exchange=ExchangeType.DCE, time=day, defaults={
-                            'expire_date': inst_data[1],
+                            'expire_date': expire_date,
                             'open': inst_data[2].replace(',', '') if inst_data[2] != '-' else
                             inst_data[5].replace(',', ''),
                             'high': inst_data[3].replace(',', '') if inst_data[3] != '-' else
@@ -259,6 +261,33 @@ async def update_from_dce(day: datetime.datetime) -> bool:
                 return True
     except Exception as e:
         logger.warning(f'update_from_dce failed: {repr(e)}', exc_info=True)
+        return False
+
+
+async def update_from_gfex(day: datetime.datetime) -> bool:
+    try:
+        async with aiohttp.ClientSession() as session:
+            await max_conn_gfex.acquire()
+            async with session.post('http://www.gfex.com.cn/gfexweb/Quote/getQuote_ftr', data={'varietyid': 'si'}) as response:
+                rst = await response.text()
+                rst = json.loads(rst)
+                max_conn_gfex.release()
+                for inst_code, inst_data in rst['contractQuote'].items():
+                    expire_date = inst_code.removeprefix('si')
+                    DailyBar.objects.update_or_create(
+                        code=inst_code,
+                        exchange=ExchangeType.GFEX, time=day, defaults={
+                            'expire_date': expire_date,
+                            'open': inst_data['openPrice'] if inst_data['openPrice'] != "--" else inst_data['closePrice'],
+                            'high': inst_data['highPrice'] if inst_data['highPrice'] != "--" else inst_data['closePrice'],
+                            'low': inst_data['lowPrice'] if inst_data['lowPrice'] != "--" else inst_data['closePrice'],
+                            'close': inst_data['closePrice'],
+                            'settlement': inst_data['clearPrice'],
+                            'volume': inst_data['matchTotQty'] if inst_data['matchTotQty'] != "--" else 0,
+                            'open_interest': inst_data['openInterest'] if inst_data['openInterest'] != "--" else 0})
+                return True
+    except Exception as e:
+        logger.warning(f'update_from_gfex failed: {repr(e)}', exc_info=True)
         return False
 
 
@@ -368,7 +397,8 @@ def calc_main_inst(inst: Instrument, day: datetime.datetime):
             exchange=inst.exchange, code__regex=f"^{inst.product_code}[0-9]+",
             expire_date__gte=expire_date, time=day.date()).order_by('-volume', '-open_interest', 'code').first()
     if check_bar is None:
-        logger.error(f"calc_main_inst 未找到主力合约：{inst}")
+        check_bar = DailyBar.objects.filter(code=inst.main_code).last()
+        logger.error(f"calc_main_inst 未找到主力合约：{inst} 使用上一个主力合约")
     if inst.main_code is None:  # 之前没有主力合约
         inst.main_code = check_bar.code
         inst.change_time = day
@@ -649,7 +679,7 @@ def load_kt_data(directory: str = r'D:\test'):
         return False
 
 
-# 从交易所获取合约当日的涨跌停幅度
+# 从交易所获取合约当日的涨跌停幅度 TODO: 广期所
 async def get_contracts_argument(day: datetime.datetime = None) -> bool:
     try:
         if day is None:

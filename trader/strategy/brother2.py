@@ -28,7 +28,7 @@ from trader.strategy import BaseModule
 from trader.utils.func_container import RegisterCallback
 from trader.utils.read_config import config, ctp_errors
 from trader.utils import ApiStruct, price_round, is_trading_day, update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, \
-    get_contracts_argument, calc_main_inst, str_to_number, get_next_id, ORDER_REF_SIGNAL_ID_START
+    get_contracts_argument, calc_main_inst, str_to_number, get_next_id, ORDER_REF_SIGNAL_ID_START, update_from_gfex
 from panel.models import *
 
 logger = logging.getLogger('CTPApi')
@@ -687,7 +687,7 @@ class TradeStrategy(BaseModule):
                 return
             logger.debug(f'{day}盘后计算,获取交易所日线数据..')
             if tasks is None:
-                tasks = [update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, get_contracts_argument]
+                tasks = [update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, update_from_gfex, get_contracts_argument]
             result = await asyncio.gather(*[func(day) for func in tasks], return_exceptions=True)
             if all(result):
                 self.io_loop.call_soon(self.calculate, day)
