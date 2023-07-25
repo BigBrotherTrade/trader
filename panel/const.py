@@ -28,6 +28,7 @@ class ExchangeType(DjangoChoices):
     CZCE = C(value='CZCE', label='郑商所')
     CFFEX = C(value='CFFEX', label='中金所')
     INE = C(value='INE', label='上期能源')
+    GFEX = C(value='GFEX', label='广交所')
 
 
 class SectionType(DjangoChoices):

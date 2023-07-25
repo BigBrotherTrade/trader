@@ -49,6 +49,7 @@ cffex_ip = 'www.cffex.com.cn'    # www.cffex.com.cn
 shfe_ip = 'www.shfe.com.cn'      # www.shfe.com.cn
 czce_ip = 'www.czce.com.cn'     # www.czce.com.cn
 dce_ip = 'www.dce.com.cn'        # www.dce.com.cn
+gfex_ip = 'www.gfex.com.cn'
 IGNORE_INST_LIST = config.get('TRADE', 'ignore_inst').split(',')
 INE_INST_LIST = ['sc', 'bc', 'nr', 'lu']
 ORDER_REF_SIGNAL_ID_START = -5
@@ -268,27 +269,28 @@ async def update_from_gfex(day: datetime.datetime) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             await max_conn_gfex.acquire()
-            async with session.post('http://www.gfex.com.cn/gfexweb/Quote/getQuote_ftr', data={'varietyid': 'si'}) as response:
-                rst = await response.text()
-                rst = json.loads(rst)
-                max_conn_gfex.release()
-                for inst_code, inst_data in rst['contractQuote'].items():
-                    expire_date = inst_code.removeprefix('si')
-                    DailyBar.objects.update_or_create(
-                        code=inst_code,
-                        exchange=ExchangeType.GFEX, time=day, defaults={
-                            'expire_date': expire_date,
-                            'open': inst_data['openPrice'] if inst_data['openPrice'] != "--" else inst_data['closePrice'],
-                            'high': inst_data['highPrice'] if inst_data['highPrice'] != "--" else inst_data['closePrice'],
-                            'low': inst_data['lowPrice'] if inst_data['lowPrice'] != "--" else inst_data['closePrice'],
-                            'close': inst_data['closePrice'],
-                            'settlement': inst_data['clearPrice'],
-                            'volume': inst_data['matchTotQty'] if inst_data['matchTotQty'] != "--" else 0,
-                            'open_interest': inst_data['openInterest'] if inst_data['openInterest'] != "--" else 0})
-                return True
+            for ids in ['lc', 'si']:
+                async with session.post(f'http://{gfex_ip}/gfexweb/Quote/getQuote_ftr', data={'varietyid': ids}) as response:
+                    rst = await response.text()
+                    rst = json.loads(rst)
+                    max_conn_gfex.release()
+                    for inst_code, inst_data in rst['contractQuote'].items():
+                        expire_date = inst_code.removeprefix(ids)
+                        DailyBar.objects.update_or_create(
+                            code=inst_code,
+                            exchange=ExchangeType.GFEX, time=day, defaults={
+                                'expire_date': expire_date,
+                                'open': inst_data['openPrice'] if inst_data['openPrice'] != "--" else inst_data['closePrice'],
+                                'high': inst_data['highPrice'] if inst_data['highPrice'] != "--" else inst_data['closePrice'],
+                                'low': inst_data['lowPrice'] if inst_data['lowPrice'] != "--" else inst_data['closePrice'],
+                                'close': inst_data['closePrice'],
+                                'settlement': inst_data['clearPrice'],
+                                'volume': inst_data['matchTotQty'] if inst_data['matchTotQty'] != "--" else 0,
+                                'open_interest': inst_data['openInterest'] if inst_data['openInterest'] != "--" else 0})
     except Exception as e:
         logger.warning(f'update_from_gfex failed: {repr(e)}', exc_info=True)
         return False
+    return True
 
 
 async def update_from_cffex(day: datetime.datetime) -> bool:
