@@ -19,7 +19,7 @@ import django
 if sys.platform == 'darwin':
     sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
 elif sys.platform == 'win32':
-    sys.path.append(r'D:\GitHub\dashboard')
+    sys.path.append(r'E:\GitHub\dashboard')
 else:
     sys.path.append('/root/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"
@@ -45,7 +45,7 @@ class APITest(asynctest.TestCase):
     async def test_get_shfe_data(self):
         self.assertTrue(await update_from_shfe(self.trading_day))
 
-    @asynctest.skipIf(True, 'no need')
+    @asynctest.skipIf(False, 'no need')
     async def test_get_dce_data(self):
         self.assertTrue(await update_from_dce(self.trading_day))
 
@@ -74,7 +74,7 @@ class APITest(asynctest.TestCase):
         result = await asyncio.gather(*tasks, return_exceptions=True)
         self.assertEqual(result, [True, True, True, True, True])
 
-    @asynctest.skipIf(False, 'no need')
+    @asynctest.skipIf(True, 'no need')
     async def test_load_from_kt(self):
         self.assertTrue(load_kt_data(r'D:\test'))
 

@@ -19,7 +19,7 @@ import django
 if sys.platform == 'darwin':
     sys.path.append('/Users/jeffchen/Documents/gitdir/dashboard')
 elif sys.platform == 'win32':
-    sys.path.append(r'D:\github\dashboard')
+    sys.path.append(r'E:\github\dashboard')
 else:
     sys.path.append('/root/gitee/dashboard')
 os.environ["DJANGO_SETTINGS_MODULE"] = "dashboard.settings"

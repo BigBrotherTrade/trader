@@ -226,7 +226,7 @@ async def update_from_dce(day: datetime.datetime) -> bool:
                     'year': day.year, 'month': day.month-1, 'day': day.day}) as response:
                 rst = await response.text()
                 max_conn_dce.release()
-                for lines in rst.split('\r\n')[1:-3]:
+                for lines in rst.split('\r\n')[3:-3]:
                     if '小计' in lines or '品种' in lines:
                         continue
                     inst_data_raw = [x.strip() for x in lines.split('\t')]
@@ -297,7 +297,7 @@ async def update_from_cffex(day: datetime.datetime) -> bool:
     try:
         async with aiohttp.ClientSession() as session:
             await max_conn_cffex.acquire()
-            async with session.get(f"http://{cffex_ip}/fzjy/mrhq/{day.strftime('%Y%m/%d')}/index.xml") as response:
+            async with session.get(f"http://{cffex_ip}/sj/hqsj/rtj/{day.strftime('%Y%m/%d')}/index.xml?id=7") as response:
                 rst = await response.text()
                 max_conn_cffex.release()
                 tree = ET.fromstring(rst)
@@ -693,7 +693,7 @@ async def get_contracts_argument(day: datetime.datetime = None) -> bool:
         async with aiohttp.ClientSession() as session:
             # 上期所
             async with session.get(
-                    f'http://{shfe_ip}/data/instrument/ContractDailyTradeArgument{day_str}.dat') as response:
+                    f'http://{shfe_ip}/data/busiparamdata/future/ContractDailyTradeArgument{day_str}.dat') as response:
                 rst = await response.read()
                 rst_json = json.loads(rst)
                 for inst_data in rst_json['ContractDailyTradeArgument']:
