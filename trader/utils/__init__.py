@@ -123,7 +123,7 @@ async def update_from_shfe(day: datetime.datetime) -> bool:
         async with aiohttp.ClientSession() as session:
             day_str = day.strftime('%Y%m%d')
             await max_conn_shfe.acquire()
-            async with session.get(f'http://{shfe_ip}/data/dailydata/kx/kx{day_str}.dat') as response:
+            async with session.get(f'http://{shfe_ip}/data/tradedata/future/dailydata/kx{day_str}.dat') as response:
                 rst = await response.read()
                 rst_json = json.loads(rst)
                 max_conn_shfe.release()
