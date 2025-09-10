@@ -13,10 +13,11 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations
 # under the License.
-
-from appdirs import AppDirs
+import sys
 import os
+import xml.etree.ElementTree as ET
 import configparser
+from appdirs import AppDirs
 from trader import version as app_ver
 
 config_example = """# trader configuration file
@@ -27,9 +28,11 @@ trade_response_prefix = MSG:CTP:RSP:TRADE:
 trade_response_format = MSG:CTP:RSP:TRADE:{}:{}
 market_response_prefix = MSG:CTP:RSP:MARKET:
 market_response_format = MSG:CTP:RSP:MARKET:{}:{}
+weixin_log = MSG:LOG:WEIXIN
 
 [TRADE]
 command_timeout = 5
+ignore_inst = WH,bb,JR,RI,RS,LR,PM,im
 
 [REDIS]
 host = 127.0.0.1
@@ -51,8 +54,9 @@ api_key = 123456
 token = 123456
 
 [LOG]
-level = INFO
+level = DEBUG
 format = %(asctime)s %(name)s [%(levelname)s] %(message)s
+weixin_format = [%(levelname)s] %(message)s
 """
 
 app_dir = AppDirs('trader')
@@ -66,3 +70,9 @@ if not os.path.exists(config_file):
 
 config = configparser.ConfigParser(interpolation=None)
 config.read(config_file)
+
+ctp_errors = {}
+ctp_xml_path = 'D:/github/trader/trader/utils/error.xml' if sys.platform == 'win32' \
+    else '/root/gitee/trader/trader/utils/error.xml'
+for error in ET.parse(ctp_xml_path).getroot():
+    ctp_errors[int(error.attrib['value'])] = error.attrib['prompt']

@@ -22,9 +22,11 @@ from django.core.exceptions import EmptyResultSet
 from .const import *
 
 
-def to_df(queryset):
+def to_df(queryset, index_col=None, parse_dates=None):
     """
     :param queryset: django.db.models.query.QuerySet
+    :param index_col: str or list of str, optional, default: None
+    :param parse_dates: list or dict, default: None
     :return: pandas.core.frame.DataFrame
     """
     try:
@@ -34,7 +36,12 @@ def to_df(queryset):
         # query which will certainly be empty
         # e.g. Book.objects.filter(author__in=[])
         return pd.DataFrame()
-    return read_sql_query(query, connection, params=params)
+    return read_sql_query(query, connection, params=params, index_col=index_col, parse_dates=parse_dates)
+
+
+class Autonumber(models.Model):
+    id = models.AutoField(verbose_name='自增值', primary_key=True)
+    create_date = models.DateTimeField(verbose_name='生成时间', auto_now_add=True)
 
 
 class Address(models.Model):
@@ -54,7 +61,8 @@ class Address(models.Model):
 class Broker(models.Model):
     name = models.CharField(verbose_name='名称', max_length=64)
     contract_type = models.CharField(verbose_name='市场', max_length=32, choices=ContractType.choices)
-    trade_address = models.ForeignKey(Address, verbose_name='交易前置', on_delete=models.CASCADE, related_name='trade_address')
+    trade_address = models.ForeignKey(Address, verbose_name='交易前置', on_delete=models.CASCADE,
+                                      related_name='trade_address')
     market_address = models.ForeignKey(Address, verbose_name='行情前置', on_delete=models.CASCADE,
                                        related_name='market_address')
     identify = models.CharField(verbose_name='唯一标志', max_length=32)
@@ -64,6 +72,7 @@ class Broker(models.Model):
     cash = models.DecimalField(verbose_name='可用资金', null=True, max_digits=12, decimal_places=2)
     current = models.DecimalField(verbose_name='动态权益', null=True, max_digits=12, decimal_places=2)
     pre_balance = models.DecimalField(verbose_name='静态权益', null=True, max_digits=12, decimal_places=2)
+    margin = models.DecimalField(verbose_name='保证金', null=True, max_digits=12, decimal_places=2)
 
     class Meta:
         verbose_name = '账户'
@@ -82,6 +91,7 @@ class Performance(models.Model):
     accumulated = models.DecimalField(verbose_name='累计净值', max_digits=8, decimal_places=3, null=True)
     dividend = models.DecimalField(verbose_name='分红', max_digits=12, decimal_places=2, null=True)
     used_margin = models.DecimalField(verbose_name='占用保证金', null=True, max_digits=12, decimal_places=2)
+    fake = models.DecimalField(verbose_name='虚拟', max_digits=12, decimal_places=2, null=True)
 
     class Meta:
         verbose_name = '绩效'
@@ -136,9 +146,9 @@ class Param(models.Model):
 class Instrument(models.Model):
     exchange = models.CharField('交易所', max_length=8, choices=ExchangeType.choices)
     section = models.CharField('分类', max_length=48, null=True, blank=True, choices=SectionType.choices)
+    sort = models.CharField('品种', max_length=48, null=True, blank=True, choices=SortType.choices)
     name = models.CharField('名称', max_length=32, null=True, blank=True)
     product_code = models.CharField('代码', max_length=16, unique=True)
-    sina_code = models.CharField('新浪代码', max_length=16, null=True, blank=True)
     all_inst = models.CharField('品种列表', max_length=256, null=True, blank=True)
     main_code = models.CharField('主力合约', max_length=16, null=True, blank=True)
     last_main = models.CharField('上个主力', max_length=16, null=True, blank=True)
@@ -177,7 +187,8 @@ class Signal(models.Model):
         verbose_name_plural = '信号列表'
 
     def __str__(self):
-        return '{}-{}-{}'.format(self.strategy, self.instrument, self.type)
+        return f"{self.instrument}({self.code}){self.type}{self.volume}手" \
+               f"{'(夜)' if self.instrument.night_trade else ''}"
 
 
 class MainBar(models.Model):
@@ -238,6 +249,7 @@ class Order(models.Model):
     status = models.CharField('状态', max_length=16, choices=OrderStatus.choices)
     send_time = models.DateTimeField('发送时间')
     update_time = models.DateTimeField('更新时间')
+    signal = models.OneToOneField(Signal, verbose_name='信号', on_delete=models.SET_NULL, null=True, blank=True)
 
     class Meta:
         verbose_name = '报单'
@@ -251,10 +263,10 @@ class Trade(models.Model):
     broker = models.ForeignKey(Broker, verbose_name='账户', on_delete=models.CASCADE)
     strategy = models.ForeignKey(Strategy, verbose_name='策略', on_delete=models.SET_NULL, null=True, blank=True)
     instrument = models.ForeignKey(Instrument, verbose_name='品种', on_delete=models.CASCADE)
-    open_order = models.ForeignKey(Order, verbose_name='开仓报单', on_delete=models.CASCADE,
-                                   related_name='open_order', null=True, blank=True)
-    close_order = models.ForeignKey(Order, verbose_name='平仓报单', on_delete=models.CASCADE,
-                                    related_name='close_order', null=True, blank=True)
+    open_order = models.OneToOneField(Order, verbose_name='开仓报单', on_delete=models.SET_NULL,
+                                      related_name='open_order', null=True, blank=True)
+    close_order = models.OneToOneField(Order, verbose_name='平仓报单', on_delete=models.SET_NULL,
+                                       related_name='close_order', null=True, blank=True)
     code = models.CharField('合约代码', max_length=16, null=True, blank=True)
     direction = models.CharField('方向', max_length=8, choices=DirectionType.choices)
     open_time = models.DateTimeField('开仓日期')

@@ -18,10 +18,11 @@ os.environ["DJANGO_ALLOW_ASYNC_UNSAFE"] = "true"
 django.setup()
 from trader.utils import is_trading_day, update_from_shfe, update_from_dce, update_from_czce, update_from_cffex, \
     create_main_all, fetch_from_quandl_all, clean_daily_bar, load_kt_data, calc_his_all, check_trading_day
+from django.utils import timezone
 
 
 async def fetch_bar():
-    day_end = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+    day_end = timezone.localtime()
     day_start = day_end - datetime.timedelta(days=365)
     tasks = []
     while day_start <= day_end:
@@ -46,7 +47,7 @@ async def fetch_bar():
 
 
 async def fetch_bar2():
-    day_end = datetime.datetime.now().replace(tzinfo=pytz.FixedOffset(480))
+    day_end = timezone.localtime()
     day_start = day_end - datetime.timedelta(days=365)
     while day_start <= day_end:
         day, trading = await check_trading_day(day_start)
@@ -68,4 +69,4 @@ create_main_all()
 # fetch_from_quandl_all()
 # clean_dailybar()
 # load_kt_data()
-# calc_his_all(datetime.datetime.today().replace(tzinfo=pytz.FixedOffset(480))-datetime.timedelta(days=1))
+# calc_his_all(timezone.localtime()-datetime.timedelta(days=1))
